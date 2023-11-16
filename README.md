@@ -1,6 +1,6 @@
-# NGS69sc02 
+# Multi-omics expression : Analysis of keratinocyte differentiation from pluripotent stem cells. 
 
-Multi-omics expression : Analysis of keratinocyte differentiation from pluripotent stem cells.
+![](../img/fond_presMJ_2.png){width=100%} 
 
 ## Descriptions 
 
