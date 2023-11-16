@@ -24,7 +24,7 @@ library(DT)
 library(data.table)
 library(downloadthis)
 ```
-![](../fond_presMJ_2.png){width=100%}
+![](../img/fond_presMJ_2.png){width=100%}
 
 
 ```{r lib, message=FALSE, echo = FALSE, warning = F}
@@ -35,11 +35,7 @@ library(RColorBrewer)
 
 library(CelliD)
 library(tidyverse) 
-library(ggpubr) #library for plotting
-
-# library(harmony)
-# library(symphony)
-# library(scHCL)
+library(ggpubr)
 
 ```
 
@@ -47,7 +43,7 @@ library(ggpubr) #library for plotting
 # Seurat Object & Formatting
 
 ```{r loaddata, message = FALSE, cache = TRUE}
-Aggr <- readRDS("./NGSsc02and69_D0-D8-D15-P0-HPEK_seurat_afterClustering.rds")
+Aggr <- readRDS("../results/NGSsc02and69_D0-D8-D15-P0-HPEK_seurat_afterClustering.rds")
 ```
 
 
@@ -355,60 +351,6 @@ nbC2 %>%
     icon = "fa fa-save"
   )
 ```
-
-
-
-
-<!-- # Symphony  -->
-
-<!-- ## PanglaoDB -->
-
-<!-- ```{r scHCL1, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi = 300} -->
-
-<!-- # hcl_lung is an example expression matrix from HCL project. -->
-<!-- data(hcl_lung) -->
-<!-- dim(hcl_lung) -->
-<!-- #[1] 2884   80 -->
-<!-- # 2884 genes expression value of 80 cells -->
-
-<!-- # scHCL has two parameters , single cell expression matrix(scdata) and  -->
-<!-- # the number of most similar cell types -->
-<!-- hcl_result <- scHCL(scdata = hcl_lung, numbers_plot = 1) -->
-<!-- scHCL_vis(hcl_result) -->
-
-<!-- vargenes <- head(VariableFeatures(Aggr), 2000) -->
-<!-- top2000 <- subset(Aggr, features = vargenes) -->
-<!-- counts2000 <- as.matrix(top2000[["SCT"]]@counts ) -->
-<!-- countsSCT <- as.matrix(Aggr[["SCT"]]@counts) -->
-
-<!-- hcl_Aggr <- scHCL(scdata = counts2000, numbers_plot = 1) -->
-<!-- scHCL_vis(hcl_Aggr) -->
-
-<!-- DimPlot(subset(x = Aggr, subset = prediction != "unassigned"),  -->
-<!--         reduction = "umap", label = F,  -->
-<!--         group.by = "prediction") -->
-
-<!-- numbCells <- table(Aggr@meta.data$prediction,  -->
-<!--                    Aggr@meta.data$orig.ident) -->
-
-<!-- nbC <- as.data.frame.matrix(numbCells) -->
-<!-- nbC <- setDT(nbC, keep.rownames = TRUE)[] -->
-<!-- nbC <- as.data.frame(nbC) -->
-
-<!-- nbC.m <- melt(numbCells, id=c("rn")) -->
-<!-- colnames(nbC.m) <- c("Prediction","Sample", "cells_count") -->
-<!-- nbC.m$Prediction <- as.factor(nbC.m$Prediction) -->
-
-<!-- ggplot(data = nbC.m, mapping = aes(x = Sample, y = cells_count, fill = Prediction)) +  -->
-<!--   geom_bar(position = "fill", stat = "identity") -->
-
-
-<!-- ``` -->
-
-
-
-<!-- ## Other DB -->
-
 
 # Material & Methods
 

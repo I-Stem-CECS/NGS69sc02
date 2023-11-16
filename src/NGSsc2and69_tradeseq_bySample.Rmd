@@ -21,11 +21,10 @@ knitr::opts_chunk$set(echo = TRUE, cache.lazy = FALSE,  message = FALSE)
 library(rmdformats)
 library(kableExtra)
 library(DT)
-#library(ghibli) # + scale_colour_ghibli_d("PonyoMedium", direction = -1)
 library(data.table)
 library(downloadthis)
 ```
-![](../../fond_presMJ_2.png){width=100%}
+![](../img/fond_presMJ_2.png){width=100%}
 
 
 ```{r lib, message=FALSE, echo = FALSE, warning = F}
@@ -141,9 +140,7 @@ make.wavePlot <- function(markers.pseudot){
           cluster_cols= FALSE , annotation_col = annotation_col ,
           annotation_colors = mat_colors ,
           annotation_legend = FALSE
-          
-          #angle_col = "45",
-          #annotation_names_col = FALSE
+
           )
     )
   }
@@ -156,9 +153,10 @@ make.wavePlot <- function(markers.pseudot){
 
 ```{r loaddata, message = FALSE, cache = TRUE}
 
-Aggr <- readRDS("../NGSsc02and69_D0-D8-D15-P0_seurat_object_before_DEG.rds")
+# Same as CellID ( ../results/NGSsc02and69_D0-D8-D15-P0-HPEK_seurat_afterClustering.rds ), 
+# but with the HPEK sample removed 
+Aggr <- readRDS("../results/NGSsc02and69_D0-D8-D15-P0_seurat_object_before_DEG.rds")
 
-#vargenes <- head(VariableFeatures(Aggr), 8000)
 VarFeat <- VariableFeatures(FindVariableFeatures(Aggr, nfeatures = 8000))
 top8000 <- subset(Aggr, features = VarFeat)
 counts8000 <- top8000[["SCT"]]@counts 
@@ -278,8 +276,6 @@ lines(SlingshotDataSet(sce3), lwd=2, col='black', type = 'lineages')
 
 ## Determining the number of knots ( tradeSeq )
 
-<!-- <span style="color:orange">**Do not take the results into consideration!**</span>  -->
-
 ```{r knots, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=14, fig.height=8, cache = TRUE, dpi = 300}
 
 lin <- getLineages(sce3, clusterLabels = "orig.ident", 
@@ -297,8 +293,6 @@ crv <- as.SlingshotDataSet(crv2)
 
 ```
 
-<!-- ![](../knots.png){width=100%} -->
-
 ```{r evaluateK, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=14, fig.height=8, cache = TRUE}
 
 icMat <- evaluateK(counts = counts, k=3:15, nGenes = 200,
@@ -310,7 +304,7 @@ icMat <- evaluateK(counts = counts, k=3:15, nGenes = 200,
 
 ## Identifying temporally dynamic genes ( 5000 genes)
 
-![](../cheatsheet_tradeseq.PNG){width=100%}
+![](../img/cheatsheet_tradeseq.PNG){width=100%}
 
 ```{r trade1cluster, message = F, eval=FALSE, cache = T}
 
@@ -334,9 +328,6 @@ rm(sce)
 rm(Aggr)
 rm(sce3)
 rm(lin)
-#rm(sce3)
-#sce.fg <- readRDS("./202112_sce.fg_sample.rds")
-#ATres <- readRDS("./ATresPCA_sampleDiff_cluster.rds")
 
 ```
 
@@ -437,10 +428,6 @@ clusPat <- clusterExpressionPatterns(sce.fg, #reduceMethod = "RSEC",
 nPointsClus <- 20
 clusPat <- readRDS("./clusPat_nPoints20_pvalue0-meanLogFC0-8_20221208_8000vargenes.rds")
 
-# plotCoClustering(clusPat$rsec, whichClusters=c("mergeClusters", "makeConsensus"))
-# plotBarplot(clusPat$rsec, whichClusters=c("makeConsensus"))
-#ce <- makeConsensus()
-
 ```
 
 ```{r plotDendrogramm, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=8, fig.height=8, dpi = 300}
@@ -465,7 +452,6 @@ The function identified `r lencUniq` clusters.
 annotation_col <- data.frame( pseudotime = c(colnames(clusPat$yhatScaled))) 
 rownames(annotation_col) <- colnames(clusPat$yhatScaled)
 mat_colors <- list(pseudotime = c(turbo(ncol(clusPat$yhatScaled)))) 
-#rainbow(ncol(clusPat$yhatScaled),  start = .7, end = .1)))
 
 names(mat_colors$pseudotime) <- unique(annotation_col$pseudotime)
     
@@ -528,17 +514,6 @@ for (xx in cUniq[1:length(cUniq)]) {
                 col = clus_colors$clusters[xx], lwd = 1.5)#,
   }
   print(p)
-  #cat("\n")
-  # pheatmap( clusPat$yhatScaled[cId, ], 
-  #         cluster_rows=TRUE, show_rownames=F, color = viridis(250),
-  #         border_color = "NA", show_colnames = F, annotation_names_col = F,
-  #         cluster_cols= FALSE , annotation_col = annotation_col ,
-  #         annotation_colors = mat_colors ,
-  #         annotation_legend = FALSE
-  # )
-  # 
-  #cat("\n\n\n\n\n")
-}
 
 ```
 
@@ -546,7 +521,6 @@ for (xx in cUniq[1:length(cUniq)]) {
 
 ```{r clustersExp30, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=12, fig.height=8}
 
-#head(expressionGenesClus)
 markers.clus <- expressionGenesClus[which(
   rownames(expressionGenesClus) %in% markers.genes ),]
 
@@ -596,9 +570,9 @@ list("ExpressionProfiles"=expressionGenesClus,
 - https://matthieuxmoreau.github.io/EarlyPallialNeurogenesis/html-Reports/Quality_Control.html 
 - https://satijalab.org/seurat/articles/pbmc3k_tutorial.html 
 
-- Quality control in scRNA-Seq can discriminate pacemaker cells: the mtRNA bias  ( https://link.springer.com/article/10.1007/s00018-021-03916-5 )
+- Quality control in scRNA-Seq can discriminate pacemaker cells: the mtRNA bias  ( https://link.springer.com/article/10.1007/s00018-021-03916-5 ) 
 
-- Normalization and variance stabilization of single-cell RNA-seq data using regularized negative binomial regression ( https://genomebiology.biomedcentral.com/articles/10.1186/s13059-019-1874-1 )
+- Normalization and variance stabilization of single-cell RNA-seq data using regularized negative binomial regression ( https://genomebiology.biomedcentral.com/articles/10.1186/s13059-019-1874-1 ) 
 
 - Comprehensive Integration of Single-Cell Data ( https://www.cell.com/cell/fulltext/S0092-8674(19)30559-8 ) 
 

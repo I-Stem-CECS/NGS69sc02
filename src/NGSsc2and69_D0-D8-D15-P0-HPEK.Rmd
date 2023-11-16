@@ -23,7 +23,7 @@ library(DT)
 library(data.table)
 library(downloadthis)
 ```
-![](./fond_presMJ_2.PNG){width=100%}
+![](../img/fond_presMJ_2.png){width=100%}
 
 
 ```{r lib, message=FALSE, echo = FALSE, warning = F}
@@ -99,13 +99,6 @@ HPEK <- CreateSeuratObject(counts = HPEK.data, project = "HPEK", min.cells = 3,
 ```
 
 ```{r loaddata2, echo = TRUE, cache = TRUE}
-
-# Aggr <- merge(P0, c( HPEK, D0, D8, D15), 
-#               add.cell.ids=c("P0", "HPEK", "D0", "D8", "D15"))
-# 
-# Aggr$orig.ident <- factor(x = Aggr$orig.ident, levels = c("D0", "D8", "D15", "P0", "HPEK"))
-# 
-# my.cols <- c("D0" = "#F8766D", 'D8'="#00C19A", 'D15' = "#ABA300", 'P0' = "#ED68ED", 'HPEK' = "#00A9FF")
 
 Aggr <- merge(P0, c( HPEK, D0, D8, D15), 
               add.cell.ids=c("BKI", "HPEK", "hPSC", "ECI", "ECII"))
@@ -191,14 +184,6 @@ sample_n(Aggr@meta.data,6) %>%
                 font_size = 14, position = "center") %>%
   row_spec(0, background = "#adc5e2", bold = T)
 
-# datatable(head(Aggr@meta.data, 20), class = "hover compact", 
-#           options = list(pageLength = 5,
-#                            initComplete = JS(
-#     "function(settings, json) {",
-#     "$(this.api().table().header()).css({'background-color': '#adc5e2', 'color': '#000'});",
-#     "}"))) 
-
-  #formatStyle(row = 1, color = "#adc5e2")
 ```
 
 
@@ -286,7 +271,7 @@ p1 <- ggplot(Aggr.filtered@meta.data, aes(x=nGene, y=percent.mt)) +
                            Aggr.filtered@meta.data$percent.mt < min.mito.thr)[1]),
         " cells remain"), x = 6000, y = 0.1)
 
-Tremoved1 <- table(Aggr.filtered@meta.data$percent.mt > max.mito.thr |                           Aggr.filtered@meta.data$percent.mt < min.mito.thr)[2]
+Tremoved1 <- table(Aggr.filtered@meta.data$percent.mt > max.mito.thr | Aggr.filtered@meta.data$percent.mt < min.mito.thr)[2]
 
 Tconserved1 <- table(Aggr.filtered@meta.data$percent.mt > max.mito.thr |
                            Aggr.filtered@meta.data$percent.mt < min.mito.thr)[1]
@@ -466,10 +451,7 @@ ggMarginal(p4, type = "histogram", fill="lightgrey")
 
 # Samples descriptions
 
-<!-- ## Intergration & Normalization -->
 ## Normalization 
-
-<!-- The joint analysis of two or more single-cell datasets poses unique challenges. In particular, identifying cell populations that are present across multiple datasets can be problematic under standard workflows. Seurat v4 includes a set of methods to match shared cell populations across datasets. These methods first identify cross-dataset pairs of cells that are in a matched biological state (‘anchors’), can be used both to correct for technical differences between datasets (i.e. batch effect correction), and to perform comparative scRNA-seq analysis of across experimental conditions ( _Stuart, Butler et al, 2019_ ). -->
 
 Biological heterogeneity in single-cell RNA-seq data is often confounded by technical factors including sequencing depth. The number of molecules detected in each cell can vary significantly between cells, even within the same celltype. Interpretation of scRNA-seq data requires effective pre-processing and normalization to remove this technical variability. In _Hafemeister and Satija, 2019_ they introduce a modeling framework for the normalization and variance stabilization of molecular count data from scRNA-seq experiment. This procedure omits the need for heuristic steps including pseudocount addition or log-transformation and improves common downstream analytical tasks such as variable gene selection, dimensional reduction, and differential expression. 
 
@@ -481,11 +463,8 @@ Aggr.filt.norm <- SCTransform(Aggr.filtered, vars.to.regress = "percent.mt")
 
 ```{r rmlist32, echo = FALSE}
 
-#saveRDS(Aggr.filt.norm, file = "./NGSsc02and69_Aggr-filt-norm_FC3000.rds")
-
 rm(Aggr)
 rm(Aggr.filtered)
-
 ```
 
 ```{r FindVariable33, echo = TRUE, message = FALSE, warning = FALSE, fig.align= "center", dpi=300}
@@ -867,7 +846,7 @@ Aggr.filt.norm <- FindClusters(Aggr.filt.norm, verbose = FALSE)
 
 DimPlot(Aggr.filt.norm, reduction = "umap", label = TRUE) 
 
-#saveRDS(Aggr.filt.norm, "./NGSsc02and69_D0-D8-D15-P0-HPEK_seurat_afterClustering.rds")
+saveRDS(Aggr.filt.norm, "../results/NGSsc02and69_D0-D8-D15-P0-HPEK_seurat_afterClustering.rds")
 ```
 
 ```{r find40, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=14, fig.height=8, dpi=300}
@@ -983,6 +962,7 @@ nbC %>%
 ## Finding differentially expressed features (cluster biomarkers) 
 
 Find markers for every cluster compared to all remaining cells, report only the positive ones. 
+
 ```{r markers41, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", cache = TRUE}
 Aggr.filt.norm.markers <- FindAllMarkers(Aggr.filt.norm, 
                                          only.pos = TRUE, min.pct = 0.25, 
@@ -1209,8 +1189,6 @@ DoHeatmap(Aggr.filt.norm, features = top10.markers$gene) +
 
 
 ```{r KRT48, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=14, fig.height=8, dpi=300}
-
-#Aggr.filt.norm$orig.ident <- factor(x = Aggr.filt.norm$orig.ident, levels = c("D0", "D8", "D15", "P0", "HPEK"))
 
 KRT.genes <- grep(pattern = "^KRT", x = rownames(Aggr.filt.norm), value = T)
 
