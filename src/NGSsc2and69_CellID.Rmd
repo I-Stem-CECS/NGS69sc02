@@ -1,0 +1,424 @@
+---
+title: "D0 - D8 - D15 - P0 - HPEK ( CellID ) "
+author: "Margot Jarrige, Hélène Polvèche"
+date: "`r format(Sys.time(), '%B, %Y')`"
+output: 
+ rmdformats::downcute:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
+    code_folding: hide
+    number_sections: true
+    css: "../../cssRapport.css"
+
+---
+  
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache.lazy = FALSE,  message = FALSE)
+library(rmdformats)
+library(kableExtra)
+library(DT)
+library(data.table)
+library(downloadthis)
+```
+![](../fond_presMJ_2.png){width=100%}
+
+
+```{r lib, message=FALSE, echo = FALSE, warning = F}
+
+library(Seurat)
+library(ggplot2)
+library(RColorBrewer)
+
+library(CelliD)
+library(tidyverse) 
+library(ggpubr) #library for plotting
+
+# library(harmony)
+# library(symphony)
+# library(scHCL)
+
+```
+
+
+# Seurat Object & Formatting
+
+```{r loaddata, message = FALSE, cache = TRUE}
+Aggr <- readRDS("./NGSsc02and69_D0-D8-D15-P0-HPEK_seurat_afterClustering.rds")
+```
+
+
+```{r DT1, echo = F, include = TRUE }
+sample_n(Aggr@meta.data,6) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c( "hover", "condensed"),
+                font_size = 14, position = "center") %>%
+  row_spec(0, background = "#adc5e2", bold = T)
+
+```
+
+```{r UMAPs, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi = 300}
+
+DimPlot(Aggr, reduction = "umap", label = TRUE, group.by = "orig.ident")
+
+DimPlot(Aggr, reduction = "umap", label = TRUE)
+
+
+```
+
+
+# CelliD 
+
+CelliD is a clustering-free multivariate statistical method for the robust extraction of per-cell gene signatures from single-cell RNA-seq. CelliD allows unbiased cell identity recognition across different donors, tissues-of-origin, model organisms and single-cell omics protocols. 
+
+CelliD use as input single cell data in the form of specific S4objects. Currently supported files are SingleCellExperiment from Bioconductor and Seurat Version 3 from CRAN. For downstream analyses, gene identifiers corresponding to official gene symbols are used. 
+
+
+## CelliD dimensionality reduction through MCA 
+
+CelliD is based on Multiple Correspondence Analysis (MCA), a multivariate method that allows the simultaneous representation of both cells and genes in the same low dimensional vector space. In such space, euclidean distances between genes and cells are computed, and per-cell gene rankings are obtained. The top ‘n’ closest genes to a given cell will be defined as its gene signature. 
+
+
+```{r cID1, echo = TRUE, message = FALSE, warning = FALSE, results='hide', cache = TRUE}
+
+Aggr <- RunMCA(Aggr)
+
+```
+
+```{r cID1a, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", cache = TRUE, dpi = 300}
+DimPlotMC(Aggr, reduction = "mca", group.by = "orig.ident", 
+          features = c("KRT5"), 
+          as.text = F) + 
+  ggtitle("MCA")
+
+```
+
+
+## Cell-type signatures
+
+CelliD can perform an automatic cell type prediction for each cell in the dataset. For that purpose, prototypical marker lists associated with well-characterized cell types are used as input, as obtained from third-party sources. Here we will use the Panglao [database](https://panglaodb.se/) of curated gene signatures to predict the cell type of each individual cell in this data. 
+
+We will illustrate the procedure with two collections of cell-type gene signatures: first restricting the assessment to known **Skin** cell types, and second, a more challenging and unbiased scenario where all cell types in the database will be evaluated. Alternative gene signature databases and/or custom made marker lists can be used by adapting their input format as described below. The quality of the predictions is obviously highly dependent on the quality of the cell type signatures. 
+
+
+```{r panglaoDB, echo = TRUE, message = FALSE, warning = FALSE, cache = TRUE}
+# download all cell-type gene signatures from panglaoDB
+panglao <- read_tsv("https://panglaodb.se/markers/PanglaoDB_markers_27_Mar_2020.tsv.gz")
+
+# All tissu
+# filter to get human specific genes
+panglao_all <- panglao %>%  filter(str_detect(species,"Hs"))
+
+# convert dataframes to a list of named vectors which is the format for CelliD input
+panglao_all <- panglao_all %>%  
+  group_by(`cell type`) %>%  
+  summarise(geneset = list(`official gene symbol`))
+all_gs <- setNames(panglao_all$geneset, panglao_all$`cell type`)
+
+#remove very short signatures
+all_gs <- all_gs[sapply(all_gs, length) >= 10]
+
+```
+
+
+```{r panglaoDB111, echo = TRUE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# restricting the analysis to skin specific gene signatues
+panglao_list <- panglao %>% filter(organ == "Skin" |
+                                     organ == "Zygote" | organ == "Epithelium")
+
+# restricting to human specific genes
+panglao_list <- panglao_list %>%  filter(str_detect(species,"Hs"))
+
+# converting dataframes into a list of vectors, which is the format needed as input for CelliD
+panglao_list <- panglao_list %>%  
+  group_by(`cell type`) %>%  
+  summarise(geneset = list(`official gene symbol`))
+skinand_gs <- setNames(panglao_list$geneset, panglao_list$`cell type`)
+
+head(skinand_gs)
+
+```
+
+
+```{r panglaoDB112, echo = TRUE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# restricting the analysis to skin specific gene signatues
+panglao_list <- panglao %>% filter(organ == "Skin" | organ == "Brain" |
+                                     organ == "Zygote" | organ == "Epithelium")
+
+# restricting to human specific genes
+panglao_list <- panglao_list %>%  filter(str_detect(species,"Hs"))
+
+# converting dataframes into a list of vectors, which is the format needed as input for CelliD
+panglao_list <- panglao_list %>%  
+  group_by(`cell type`) %>%  
+  summarise(geneset = list(`official gene symbol`))
+skinandBrain_gs <- setNames(panglao_list$geneset, panglao_list$`cell type`)
+
+head(skinandBrain_gs)
+
+```
+
+
+## Assessing per-cell gene signature enrichments against pre-established marker lists 
+
+A per-cell assessment is performed, where the enrichment of each cell’s gene signature against each cell-type marker lists is evaluated through hypergeometric tests. No intermediate clustering steps are used here. By default, the size n of the cell’s gene signature is set to `n.features = 200`. 
+
+By default, only reference gene sets of size ≥ **10** are considered. In addition, _hypergeometric test p-values_ are corrected by multiple testing for the number of gene sets evaluated. A cell is considered as enriched in those gene sets for which the hypergeometric test p-value is <1e-02 (-log10 corrected p-value >2), after _Benjamini Hochberg multiple testing correction_. Default settings can be modified within the `RunCellHGT` function.
+
+The RunCellHGT function will provide the -log10 corrected p-value for each cell and each signature evaluated, so a multi-class evaluation is enabled. When a disjointed classification is required, a cell will be assigned to the gene set with the lowest significant corrected p-value. If no significant hits are found, a cell will remain unassigned. 
+
+
+```{r cID4, echo = TRUE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Performing per-cell hypergeometric tests against the gene signature collection
+HGT_all_gs <- RunCellHGT(Aggr, 
+                          pathways = all_gs, 
+                          dims = 1:50, n.features = 200)
+
+
+# For each cell, assess the signature with the lowest corrected p-value (max -log10 corrected p-value)
+all_gs_prediction <- rownames(HGT_all_gs)[apply(HGT_all_gs, 2, which.max)]
+
+# For each cell, evaluate if the lowest p-value is significant
+all_gs_prediction_signif <- ifelse(apply(HGT_all_gs, 2, max)>2, yes = all_gs_prediction, "unassigned")
+
+# Save cell type predictions as metadata within the Seurat object
+Aggr$General_prediction <- all_gs_prediction_signif
+```
+
+
+```{r cID5, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=14, fig.height=8, dpi = 300}
+
+
+DimPlot(Aggr, reduction = "umap", label = TRUE, 
+        group.by = "General_prediction") + NoLegend()
+
+```
+
+
+```{r cID6, echo = TRUE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Performing per-cell hypergeometric tests against the gene signature collection
+HGT_spec_gs <- RunCellHGT(Aggr, 
+                          pathways = skinand_gs, 
+                          dims = 1:50, n.features = 200)
+
+
+# For each cell, assess the signature with the lowest corrected p-value (max -log10 corrected p-value)
+spe_gs_prediction <- rownames(HGT_spec_gs)[apply(HGT_spec_gs, 2, which.max)]
+
+# For each cell, evaluate if the lowest p-value is significant
+spe_gs_prediction_signif <- ifelse(apply(HGT_spec_gs, 2, max)>2, yes = spe_gs_prediction, "unassigned")
+
+# Save cell type predictions as metadata within the Seurat object
+Aggr$prediction <- spe_gs_prediction_signif
+```
+
+
+```{r cID7, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi = 300}
+
+DimPlot(Aggr, reduction = "umap", label = F, 
+        group.by = "prediction")
+
+```
+
+```{r cID8, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi = 300}
+
+
+DimPlot(subset(x = Aggr, subset = prediction != "unassigned"), 
+        reduction = "umap", label = F, 
+        group.by = "prediction")
+
+numbCells <- table(Aggr@meta.data$prediction, 
+                   Aggr@meta.data$orig.ident)
+
+nbC <- as.data.frame.matrix(numbCells)
+nbC <- setDT(nbC, keep.rownames = TRUE)[]
+nbC <- as.data.frame(nbC)
+
+nbC.m <- melt(numbCells, id=c("rn"))
+colnames(nbC.m) <- c("Prediction","Sample", "cells_count")
+nbC.m$Prediction <- as.factor(nbC.m$Prediction)
+
+ggplot(data = nbC.m, mapping = aes(x = Sample, y = cells_count, fill = Prediction)) + 
+  geom_bar(position = "fill", stat = "identity")
+
+
+```
+
+
+```{r cellbysample41, echp = TRUE, results = 'hide'}
+numbCells
+```
+
+```{r cellbysamples42, echo = FALSE, include = TRUE}
+
+numbCells %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r downloadNumCell, echo = F}
+
+nbC %>%
+  download_this(
+    output_name = "NGSsc02and69_CellID_numbCells_skin_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download data as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+
+```{r cID62, echo = TRUE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Performing per-cell hypergeometric tests against the gene signature collection
+HGT_spec_gs2 <- RunCellHGT(Aggr, 
+                          pathways = skinandBrain_gs, 
+                          dims = 1:50, n.features = 200)
+
+
+# For each cell, assess the signature with the lowest corrected p-value (max -log10 corrected p-value)
+spe_gs_prediction2 <- rownames(HGT_spec_gs2)[apply(HGT_spec_gs2, 2, which.max)]
+
+# For each cell, evaluate if the lowest p-value is significant
+spe_gs_prediction_signif2 <- ifelse(apply(HGT_spec_gs2, 2, max)>2, yes = spe_gs_prediction2, "unassigned")
+
+# Save cell type predictions as metadata within the Seurat object
+Aggr$prediction2 <- spe_gs_prediction_signif2
+```
+
+
+```{r cID272, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi = 300}
+
+DimPlot(Aggr, reduction = "umap", label = F, 
+        group.by = "prediction2")
+
+```
+
+```{r cID82, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi = 300}
+
+
+DimPlot(subset(x = Aggr, subset = prediction2 != "unassigned"), 
+        reduction = "umap", label = F, 
+        group.by = "prediction2")
+
+numbCells2 <- table(Aggr@meta.data$prediction2, 
+                   Aggr@meta.data$orig.ident)
+
+nbC2 <- as.data.frame.matrix(numbCells2)
+nbC2 <- setDT(nbC2, keep.rownames = TRUE)[]
+nbC2 <- as.data.frame(nbC2)
+
+nbC2.m <- melt(numbCells2, id=c("rn"))
+colnames(nbC2.m) <- c("Prediction","Sample", "cells_count")
+nbC2.m$Prediction <- as.factor(nbC2.m$Prediction)
+
+ggplot(data = nbC2.m, mapping = aes(x = Sample, y = cells_count, fill = Prediction)) +
+  geom_bar(position = "fill", stat = "identity")
+
+
+```
+
+
+```{r cellbysample412, echp = TRUE, results = 'hide'}
+numbCells2
+```
+
+```{r cellbysamples422, echo = FALSE, include = TRUE}
+
+numbCells2 %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r downloadNumCell2, echo = F}
+
+nbC2 %>%
+  download_this(
+    output_name = "NGSsc02and69_CellID_numbCells_skin_brain_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download data as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+
+
+
+<!-- # Symphony  -->
+
+<!-- ## PanglaoDB -->
+
+<!-- ```{r scHCL1, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi = 300} -->
+
+<!-- # hcl_lung is an example expression matrix from HCL project. -->
+<!-- data(hcl_lung) -->
+<!-- dim(hcl_lung) -->
+<!-- #[1] 2884   80 -->
+<!-- # 2884 genes expression value of 80 cells -->
+
+<!-- # scHCL has two parameters , single cell expression matrix(scdata) and  -->
+<!-- # the number of most similar cell types -->
+<!-- hcl_result <- scHCL(scdata = hcl_lung, numbers_plot = 1) -->
+<!-- scHCL_vis(hcl_result) -->
+
+<!-- vargenes <- head(VariableFeatures(Aggr), 2000) -->
+<!-- top2000 <- subset(Aggr, features = vargenes) -->
+<!-- counts2000 <- as.matrix(top2000[["SCT"]]@counts ) -->
+<!-- countsSCT <- as.matrix(Aggr[["SCT"]]@counts) -->
+
+<!-- hcl_Aggr <- scHCL(scdata = counts2000, numbers_plot = 1) -->
+<!-- scHCL_vis(hcl_Aggr) -->
+
+<!-- DimPlot(subset(x = Aggr, subset = prediction != "unassigned"),  -->
+<!--         reduction = "umap", label = F,  -->
+<!--         group.by = "prediction") -->
+
+<!-- numbCells <- table(Aggr@meta.data$prediction,  -->
+<!--                    Aggr@meta.data$orig.ident) -->
+
+<!-- nbC <- as.data.frame.matrix(numbCells) -->
+<!-- nbC <- setDT(nbC, keep.rownames = TRUE)[] -->
+<!-- nbC <- as.data.frame(nbC) -->
+
+<!-- nbC.m <- melt(numbCells, id=c("rn")) -->
+<!-- colnames(nbC.m) <- c("Prediction","Sample", "cells_count") -->
+<!-- nbC.m$Prediction <- as.factor(nbC.m$Prediction) -->
+
+<!-- ggplot(data = nbC.m, mapping = aes(x = Sample, y = cells_count, fill = Prediction)) +  -->
+<!--   geom_bar(position = "fill", stat = "identity") -->
+
+
+<!-- ``` -->
+
+
+
+<!-- ## Other DB -->
+
+
+# Material & Methods
+
+## Sources 
+
+- Cellid ( https://bioconductor.org/packages/release/bioc/vignettes/CelliD/inst/doc/BioconductorVignette.html )
+
+## Session Info
+
+
+```{r infosess}
+sessionInfo()
+```

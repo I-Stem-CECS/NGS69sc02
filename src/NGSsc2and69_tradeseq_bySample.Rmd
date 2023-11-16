@@ -1,0 +1,614 @@
+---
+title: "D0 - D8 - D15 - P0 ( Trajectory ) "
+author: "Margot Jarrige, Hélène Polvèche, Alexandre Carteron"
+date: "`r format(Sys.time(), '%B, %Y')`"
+output: 
+ rmdformats::downcute:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
+    code_folding: hide
+    number_sections: true
+    css: "../../../cssRapport.css"
+    
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache.lazy = FALSE,  message = FALSE)
+library(rmdformats)
+library(kableExtra)
+library(DT)
+#library(ghibli) # + scale_colour_ghibli_d("PonyoMedium", direction = -1)
+library(data.table)
+library(downloadthis)
+```
+![](../../fond_presMJ_2.png){width=100%}
+
+
+```{r lib, message=FALSE, echo = FALSE, warning = F}
+library(tidyverse)
+library(Seurat)
+library(RColorBrewer)
+library(SingleCellExperiment)
+library(slingshot)
+library(tradeSeq)
+library(pheatmap)
+library(viridis)
+library(clusterExperiment)
+library(cowplot)
+
+```
+
+```{r functions, message=FALSE, echo = FALSE, warning = F}
+
+DFexpressionPseudotimeGene <- function(models, counts, 
+                                       nPoints = 100, gene, sample = 1){
+  # check if all gene IDs provided are present in the models object.
+  if (is(gene, "character")) {
+    if (!all(gene %in% names(models))) {
+      stop("The gene ID is not present in the models object.")
+    }
+    id <- which(names(models) %in% gene)
+  } else id <- gene
+
+  dm <- colData(models)$tradeSeq$dm # design matrix
+  y <- unname(counts[names(models),][id,])
+  nCurves <- length(grep(x = colnames(dm), pattern = "t[1-9]"))
+  betaMat <- rowData(models)$tradeSeq$beta[[1]]
+  beta <- betaMat[id,]
+
+
+  #construct time variable based on cell assignments.
+  lcol <- timeAll <- rep(0, nrow(dm))
+  for (jj in seq_len(nCurves)) {
+    for (ii in seq_len(nrow(dm))) {
+      if (dm[ii, paste0("l", jj)] == 1) {
+        timeAll[ii] <- dm[ii, paste0("t", jj)]
+        lcol[ii] <- jj
+      } else {
+        next
+      }
+    }
+  }
+
+  # expression raw data
+  df <- data.frame("time" = timeAll,
+                   "gene_count" = y,
+                   "lineage" = as.character(lcol),
+                   "gene" = c(rep(gene, length(y))))
+  rows <- sample(seq_len(nrow(df)), nrow(df) * sample, replace = FALSE)
+  df <- df[rows, ]
+  
+  return(df)
+}
+
+
+multipleGenesC <- function(listGenes, models, counts, 
+                           nPoints = 100, sample = 1){
+  df <- DFexpressionPseudotimeGene(models = models, 
+                                    counts = counts, 
+                                    nPoints = nPoints, 
+                                    sample = sample,
+                                    gene = listGenes[1])
+  for (i in 2 : length(listGenes)){
+    dfx <-  DFexpressionPseudotimeGene(models = models, 
+                                    counts = counts, 
+                                    nPoints = nPoints, 
+                                    sample = sample,
+                                    gene = listGenes[i])
+    df <- rbind(df, dfx)
+  }
+  df2 <- as_tibble(df) %>% 
+  mutate(time = round(time/5)*5) %>% #/10)*10
+  group_by(time, gene, lineage) %>% 
+  summarize(moy_count = mean(gene_count, na.rm = T))
+  
+  return(df2)
+}
+
+
+make.wavePlot <- function(markers.pseudot){
+  nLineages <- names(table(markers.pseudot$lineage))
+  for ( i in 1:length(nLineages)){
+    lin5 <- markers.pseudot[which(markers.pseudot$lineage %in% i),]
+
+    lin5.pw <- pivot_wider(lin5, 
+                      names_from = gene, values_from = moy_count) %>% 
+              select(!lineage) 
+
+    lin5.pw.2 <- lin5.pw %>% 
+      ungroup()# %>% 
+ 
+    lin5.mat <- as.data.frame(lin5.pw.2)
+    rownames(lin5.mat) <- lin5.mat$time
+    lin5.mat <- t(lin5.mat[, c(2:ncol(lin5.mat))])
+    #colnames(lin1.mat) <- c(1:ncol(lin1.mat))
+    
+    annotation_col <- data.frame( pseudotime = c(colnames(lin5.mat))) 
+    rownames(annotation_col) <- colnames(lin5.mat)
+    mat_colors <- list(pseudotime = c(rainbow(ncol(lin5.mat), start = .7, end = .1)))
+    names(mat_colors$pseudotime) <- unique(annotation_col$pseudotime)
+
+    cat("  \n - Lineage n°", nLineages[i], " :  \n")
+    
+    print(
+      pheatmap( log1p(lin5.mat), 
+          cluster_rows=TRUE, show_rownames=TRUE, color = plasma(250),
+          border_color = "NA", show_colnames = F,
+          cluster_cols= FALSE , annotation_col = annotation_col ,
+          annotation_colors = mat_colors ,
+          annotation_legend = FALSE
+          
+          #angle_col = "45",
+          #annotation_names_col = FALSE
+          )
+    )
+  }
+}
+
+
+```
+
+# Seurat Object 
+
+```{r loaddata, message = FALSE, cache = TRUE}
+
+Aggr <- readRDS("../NGSsc02and69_D0-D8-D15-P0_seurat_object_before_DEG.rds")
+
+#vargenes <- head(VariableFeatures(Aggr), 8000)
+VarFeat <- VariableFeatures(FindVariableFeatures(Aggr, nfeatures = 8000))
+top8000 <- subset(Aggr, features = VarFeat)
+counts8000 <- top8000[["SCT"]]@counts 
+counts <- Aggr[["SCT"]]@counts
+
+```
+
+# PCA
+
+```{r PCA4, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi = 300}
+DimPlot(Aggr, reduction = "pca", group.by = "orig.ident")
+```
+ 
+ 
+```{r pca5, echo = TRUE, fig.align= "center", dpi = 300}
+FeaturePlot(Aggr, features = c("NANOG"), 
+            reduction = "pca", cols = c("cadetblue3", "brown2"))
+FeaturePlot(Aggr, features = c("POU5F1"), 
+            reduction = "pca", cols = c("cadetblue3", "brown2"))
+FeaturePlot(Aggr, features = c("KRT8"), 
+            reduction = "pca", cols = c("cadetblue3", "brown2"))
+FeaturePlot(Aggr, features = c("KRT18"), 
+            reduction = "pca", cols = c("cadetblue3", "brown2"))
+FeaturePlot(Aggr, features = c("KRT5"), 
+            reduction = "pca", cols = c("cadetblue3", "brown2"))
+FeaturePlot(Aggr, features = c("KRT14"), 
+            reduction = "pca", cols = c("cadetblue3", "brown2"))
+
+```
+
+
+# UMAP
+
+Seurat offers several non-linear dimensional reduction techniques, such as tSNE and UMAP, to visualize and explore these datasets. The goal of these algorithms is to learn the underlying manifold of the data in order to place similar cells together in low-dimensional space.
+
+In the standard Seurat workflow the authors focus on "small numbers" of PCs. Interestingly, they’ve found that when using sctransform, they often benefit by pushing this parameter even higher. they believe this is because the sctransform workflow performs more effective normalization, strongly removing technical effects from the data. 
+
+Non-linear dimensional reduction : 
+
+```{r UMAP6, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi = 300}
+
+DimPlot(Aggr, reduction = "umap", label = TRUE, group.by = "orig.ident") 
+
+
+```
+ 
+```{r KRT7, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=14, fig.height=8, dpi = 300}
+
+
+
+KRT.genes <- grep(pattern = "^KRT", x = rownames(Aggr), value = T)
+
+DotPlot(Aggr, features = KRT.genes, assay = "RNA", group.by = "orig.ident") +
+            guides(color = guide_colorbar(title = "Scaled Average Expression")) +
+            theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10 ))
+
+
+
+COL.genes <- grep(pattern = "^COL", x = rownames(Aggr), value = T)
+
+DotPlot(Aggr, features = COL.genes, assay = "RNA", group.by = "orig.ident") +
+  guides(color = guide_colorbar(title = "Scaled Average Expression")) +
+  scale_colour_gradient2(low = "#fcf0f1", mid = "#f86368", high = "#b32d2e") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10 ))
+
+
+markers.genes <- c("KRT5", "KRT14", "TNC", "FABP5", "KCNJ15", "KRT17", "TIMP3", "ACTG2", "SNAI2", "IFI6", "MT1M", "MX1", "ISG15", "S100A4", "ITGA6", "LGALS1", "OXTR", "ACKR3", "IFI27", "CPE", "JAG1", "IGFBP6", "CAV1", "COL17A1", "COL5A2", "COL1A2", "KLF10")
+
+DotPlot(Aggr, features = markers.genes, assay = "RNA", group.by = "orig.ident") +
+  guides(color = guide_colorbar(title = "Scaled Average Expression")) + 
+  scale_colour_gradient2(low = "#edfaef", mid = "#00ba37", high = "#007017") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10 ))
+
+
+# for (i in 1:length(markers.genes)){
+#   RidgePlot(Aggr, features = markers.genes[i], group.by = "orig.ident")
+# }
+
+diff.genes <- c("NANOG", "POU5F1", "KRT5", "KRT14")
+DotPlot(Aggr, features = diff.genes, assay = "RNA", group.by = "orig.ident") +
+  guides(color = guide_colorbar(title = "Scaled Average Expression")) + 
+  scale_colour_gradient2(low = "#f0f6fc", mid = "#3582c4", high = "#043959") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10 ))
+```
+
+# Trajectory Inference by Seurat's clusters
+
+## Lineage ( Slingshot )
+
+```{r scePCACluster, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=8, fig.height=8, results='hide', fig.keep='all'}
+
+sce <- as.SingleCellExperiment(Aggr)
+
+```
+
+```{r sceUMAPCluster1, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=8, fig.height=8, results='hide',fig.keep='all', dpi = 300}
+
+sce3 <- slingshot(sce, clusterLabels = 'orig.ident', reducedDim = 'UMAP',
+                  start.clus = "D0" , end.clus = "P0")
+
+#saveRDS(sce3, "./results/sce3_NGS6902.rds")
+
+colors <- colorRampPalette(brewer.pal(11,'Spectral')[-6])(150)
+plotcol <-  colors[cut(as.numeric(sce3$orig.ident), breaks=150)]
+
+plot(reducedDims(sce3)$UMAP, col = plotcol, pch=16, asp = 1) +
+lines(SlingshotDataSet(sce3), lwd=2, col='black', type = 'lineages')
+```
+
+- slingPseudotime_1
+
+```{r sceUMAPCluster2, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=8, fig.height=8, results='hide',fig.keep='all', dpi = 300}
+plotcol1 <- colors[cut(sce3$slingPseudotime_1, breaks=150)]
+plot(reducedDims(sce3)$UMAP, col = plotcol1, pch=16, asp = 1) +
+lines(SlingshotDataSet(sce3), lwd=2, col='black', type = 'lineages')
+```
+
+## Determining the number of knots ( tradeSeq )
+
+<!-- <span style="color:orange">**Do not take the results into consideration!**</span>  -->
+
+```{r knots, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=14, fig.height=8, cache = TRUE, dpi = 300}
+
+lin <- getLineages(sce3, clusterLabels = "orig.ident", 
+                   start.clus = "D0" , end.clus = "P0", 
+                   reducedDim = 'UMAP')
+crv2 <- getCurves(lin)
+
+plotGeneCount(curve = crv2, clusters = crv2$orig.ident, 
+              title = "Colored by samples")
+
+crv <- as.SlingshotDataSet(crv2)
+
+#saveRDS(crv, "./results/crv_NGS6902.rds")
+#saveRDS(counts, "./results/counts_NGS6902.rds")
+
+```
+
+<!-- ![](../knots.png){width=100%} -->
+
+```{r evaluateK, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=14, fig.height=8, cache = TRUE}
+
+icMat <- evaluateK(counts = counts, k=3:15, nGenes = 200,
+                   sds = crv, 
+                   verbose = F)
+
+
+```
+
+## Identifying temporally dynamic genes ( 5000 genes)
+
+![](../cheatsheet_tradeseq.PNG){width=100%}
+
+```{r trade1cluster, message = F, eval=FALSE, cache = T}
+
+# fit negative binomial GAM
+
+counts8000 <- as.matrix(counts8000)
+sce.fg <- fitGAM(counts = counts8000, sds = crv,
+                 nknots = 8, verbose = T)
+```
+
+```{r trade1clustervealT, message = F, echo = FALSE, eval=TRUE, cache = T}
+
+# fit negative binomial GAM
+
+counts8000 <- as.matrix(counts8000)
+sce.fg <- readRDS("./sce.fg_20221208_8000vargenes.rds")
+```
+
+```{r rmandRead91cluster, echo = FALSE }
+rm(sce)
+rm(Aggr)
+rm(sce3)
+rm(lin)
+#rm(sce3)
+#sce.fg <- readRDS("./202112_sce.fg_sample.rds")
+#ATres <- readRDS("./ATresPCA_sampleDiff_cluster.rds")
+
+```
+
+```{r pGCount, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=14, fig.height=8, cache = TRUE, dpi = 300}
+
+plotGeneCount(curve = crv2, counts = counts8000, clusters = crv2$orig.ident,
+              models = sce.fg)
+```
+
+```{r ATres,  echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=14, fig.height=8, cache = TRUE}
+# test for dynamic expression
+
+ATres <- associationTest(sce.fg)
+```
+
+```{r ATres93cluster, echo = TRUE, results = 'hide'}
+
+head(ATres)
+
+```
+
+
+```{r ATS94cluster2, echo = FALSE, include = TRUE}
+
+AT.markers <- ATres[which(rownames(ATres) %in% c(markers.genes)),]
+AT.markers %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"),
+                font_size = 14, position = "center") %>%
+  row_spec(0, background = "#adc5e2", bold = T)
+
+```
+
+
+```{r downloadATsCluster, echo = F}
+ATres2 <- as.data.frame(ATres)
+ATres2 <- setDT(ATres2, keep.rownames = TRUE)[]
+ATres2 <- as.data.frame(ATres2)
+ATres2[is.na(ATres2)] <- "NA"
+
+ATres2 %>%
+  download_this(
+    output_name = "NGSsc02and69_Genes_diff_origIdent_Trajectory_TradeSeq_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download Trajectory genes by Clusters as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+
+rm(ATres2)
+```
+
+## Wave Plots ( markers )
+
+```{r plotWave, results="asis", echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=12, fig.height=8, dpi = 300}
+
+markers.pseudot <- multipleGenesC(markers.genes, sce.fg, counts8000)
+
+make.wavePlot(markers.pseudot = markers.pseudot)
+
+```
+
+
+## Markers expression by lineage : 
+
+```{r plotSmoth, results="asis", echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=14, fig.height=8, dpi = 300}
+
+  
+for (i in 1:length(markers.genes)){
+  
+  cat("  \n- ", markers.genes[i], "  \n")
+  print(plotSmoothers(sce.fg, counts8000, gene = markers.genes[i]) +
+          scale_x_continuous(breaks = c(1,20, 40), labels=c(0, 10, 20)))
+  print(plotGeneCount(crv, counts8000, 
+                      gene = markers.genes[i]))
+}
+
+```
+
+## Clustering on Expression pattern
+
+TradeSeq provides the functionality to cluster genes according to their expression pattern along the lineages with the `clusterExpressionPatterns` function. A number of equally spaced points for every lineage are selected to perform the clustering, and the number of points can be selected with the `nPoints argument`. The genes argument specifies which genes you want to cluster (e.g., all genes with differential expression patterns). Here, we use **20** points along on the lineage to cluster the  genes in the dataset with __*p*-value = 0__ and __meanLogFC >= 0,8__ . The clustering itself occurs by the `clusterExperiment` package (*Risso et al. 2018*) with RSEC algorithm (Resampling-based Sequential Ensemble Clustering).
+
+
+```{r clustExpression, eval=FALSE }
+
+## 
+nPointsClus <- 20
+clusPat <- clusterExpressionPatterns(sce.fg, #reduceMethod = "RSEC",
+                                     nPoints = nPointsClus,
+                                     genes = rownames(ATres)[which(ATres$pvalue %in% 0 & ATres$meanLogFC >= 0.8)])
+
+#saveRDS(clusPat, "./clusPat_20220914_10nPoints_pval0_mLogFC0.8.rds")
+```
+
+```{r readclusPat, eval = TRUE, echo = FALSE }
+nPointsClus <- 20
+clusPat <- readRDS("./clusPat_nPoints20_pvalue0-meanLogFC0-8_20221208_8000vargenes.rds")
+
+# plotCoClustering(clusPat$rsec, whichClusters=c("mergeClusters", "makeConsensus"))
+# plotBarplot(clusPat$rsec, whichClusters=c("makeConsensus"))
+#ce <- makeConsensus()
+
+```
+
+```{r plotDendrogramm, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=8, fig.height=8, dpi = 300}
+ce <- makeDendrogram(clusPat$rsec)
+plotDendrogram(ce)
+
+```
+
+```{r cUniq, echo = TRUE, message = FALSE, warning = FALSE}
+clusterLabels <- primaryCluster(clusPat$rsec)
+
+cUniq <- unique(clusterLabels)
+cUniq <- cUniq[!cUniq == -1] # remove unclustered genes
+cUniq <- cUniq[order(cUniq)]
+lencUniq <- length(cUniq)
+
+```
+
+The function identified `r lencUniq` clusters. 
+
+```{r clustExpressionIMG, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=6, fig.height=8, dpi = 300}
+annotation_col <- data.frame( pseudotime = c(colnames(clusPat$yhatScaled))) 
+rownames(annotation_col) <- colnames(clusPat$yhatScaled)
+mat_colors <- list(pseudotime = c(turbo(ncol(clusPat$yhatScaled)))) 
+#rainbow(ncol(clusPat$yhatScaled),  start = .7, end = .1)))
+
+names(mat_colors$pseudotime) <- unique(annotation_col$pseudotime)
+    
+pheatmap( clusPat$yhatScaled[which(clusterLabels != -1 ), ], 
+          cluster_rows=TRUE, show_rownames=F, color = plasma(250),
+          border_color = "NA", show_colnames = F, annotation_names_col = F,
+          cluster_cols= FALSE , annotation_col = annotation_col ,
+          annotation_colors = mat_colors , cutree_rows = 9, #lencUniq,
+          annotation_legend = FALSE
+          )
+```
+
+```{r clustExpressionIMG2, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=8, fig.height=6, dpi = 300}
+clusPat.yhat.markers <- clusPat$yhatScaled
+index.markers <- which(rownames(clusPat.yhat.markers) %in% markers.genes)
+clusPat.yhat.markers <- clusPat.yhat.markers[which(rownames(clusPat.yhat.markers) %in% markers.genes), ]
+
+pheatmap( clusPat.yhat.markers, 
+          cluster_rows=TRUE, show_rownames=T, color = plasma(250),
+          border_color = "NA", show_colnames = F, 
+          cluster_cols= FALSE , annotation_col = annotation_col ,
+          annotation_colors = mat_colors , annotation_names_col = F,
+          annotation_legend = FALSE
+          )
+```
+
+```{r clustersVisu, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=12, fig.height=8, results='asis', dpi = 300}
+
+clus_colors <- list(clusters = c(mako(length(cUniq), alpha = 0.8 , begin = 0.2)))
+names(clus_colors$clusters) <- cUniq
+
+expressionGenesClus <- data.frame(clusterN = NA, clusPat$yhatScaled)
+
+# Un seul lineage
+for (xx in cUniq[1:length(cUniq)]) {
+  cId <- which(clusterLabels == xx)
+  expressionGenesClus[cId, "clusterN" ] <- xx
+  cat('\n\n')
+  cat("- Cluster #", xx , " : \n")
+  cat('\n')
+  cat("There are ", length(cId)," genes in this cluster. \n")
+  cat('\n')
+  p <- ggplot(data = data.frame(x = 1:nPointsClus,
+                                y = rep(range(clusPat$yhatScaled[cId, ]),
+                                        nPointsClus / 2)),
+              aes(x = x, y = y)) +
+    geom_point(alpha = 0) +
+    labs(title = paste0("Cluster ", xx),  x = "Pseudotime", y = "Normalized expression") +
+    theme_classic()
+  for (ii in 1:length(cId)) {
+    geneId <- rownames(clusPat$yhatScaled)[cId[ii]]
+    if(geneId %in% c(markers.genes)){
+      cat('\n')
+      cat("  \nThe marker gene ", geneId," is in the cluster ", xx,". \n")
+      cat('\n')
+    }
+    p <- p +
+      geom_line(data = data.frame(x = 1:nPointsClus,
+                                  y = clusPat$yhatScaled[geneId, ]), 
+                col = clus_colors$clusters[xx], lwd = 1.5)#,
+  }
+  print(p)
+  #cat("\n")
+  # pheatmap( clusPat$yhatScaled[cId, ], 
+  #         cluster_rows=TRUE, show_rownames=F, color = viridis(250),
+  #         border_color = "NA", show_colnames = F, annotation_names_col = F,
+  #         cluster_cols= FALSE , annotation_col = annotation_col ,
+  #         annotation_colors = mat_colors ,
+  #         annotation_legend = FALSE
+  # )
+  # 
+  #cat("\n\n\n\n\n")
+}
+
+```
+
+## DL Genes & Expression pattern
+
+```{r clustersExp30, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=12, fig.height=8}
+
+#head(expressionGenesClus)
+markers.clus <- expressionGenesClus[which(
+  rownames(expressionGenesClus) %in% markers.genes ),]
+
+```
+
+
+```{r GenesExpressionCluster, echo = FALSE, include = TRUE}
+
+head(markers.clus) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"),
+                font_size = 14, position = "center") %>%
+  row_spec(0, background = "#adc5e2", bold = T)
+
+```
+
+
+```{r downloadGenesExpressionCluster, echo = F}
+
+markers.clus <- setDT(markers.clus, keep.rownames = TRUE)[]
+markers.clus <- as.data.frame(markers.clus)
+markers.clus[is.na(markers.clus)] <- "NA"
+
+expressionGenesClus <- setDT(expressionGenesClus, keep.rownames = TRUE)[]
+expressionGenesClus <- as.data.frame(expressionGenesClus)
+expressionGenesClus[is.na(expressionGenesClus)] <- "NA"
+
+list("ExpressionProfiles"=expressionGenesClus,
+     "Markers.ExpressionProfiles"=markers.clus) %>%
+  download_this(
+    output_name = "NGSsc02and69_CLusters_PsuedoTime_ExpressionProfiles_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download genes with Pleudotimes clustering  as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+
+```
+
+
+
+# Material & Methods
+
+## Sources 
+
+- https://matthieuxmoreau.github.io/EarlyPallialNeurogenesis/html-Reports/Quality_Control.html 
+- https://satijalab.org/seurat/articles/pbmc3k_tutorial.html 
+
+- Quality control in scRNA-Seq can discriminate pacemaker cells: the mtRNA bias  ( https://link.springer.com/article/10.1007/s00018-021-03916-5 )
+
+- Normalization and variance stabilization of single-cell RNA-seq data using regularized negative binomial regression ( https://genomebiology.biomedcentral.com/articles/10.1186/s13059-019-1874-1 )
+
+- Comprehensive Integration of Single-Cell Data ( https://www.cell.com/cell/fulltext/S0092-8674(19)30559-8 ) 
+
+- Using Slingshot Vignette ( http://52.71.54.154/packages/release/bioc/vignettes/slingshot/inst/doc/vignette.html#using-slingshot ) 
+
+- ClusterExperiment package & RSEC strategy ( https://bioconductor.org/packages/devel/bioc/vignettes/clusterExperiment/inst/doc/clusterExperimentTutorial.html ) 
+
+## Session Info
+
+
+```{r infosess}
+sessionInfo()
+```

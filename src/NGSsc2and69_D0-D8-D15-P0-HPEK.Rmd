@@ -1,0 +1,1584 @@
+---
+title: "hPSC - ECI - ECII - BKI - HPEK"
+author: "Hélène Polvèche, Margot Jarrige"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+ rmdformats::downcute:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
+    code_folding: hide
+    number_sections: true
+    css: "../../cssRapport.css"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache.lazy = FALSE,  message = FALSE)
+library(rmdformats)
+library(kableExtra)
+library(DT)
+#library(ghibli) # + scale_colour_ghibli_d("PonyoMedium", direction = -1)
+library(data.table)
+library(downloadthis)
+```
+![](./fond_presMJ_2.PNG){width=100%}
+
+
+```{r lib, message=FALSE, echo = FALSE, warning = F}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(umap)
+library(ggplot2)
+library(RColorBrewer)
+library(ggExtra)
+library(cowplot)
+library(reticulate)
+```
+
+```{r functionRyan-Zhu, message=FALSE, echo = FALSE, warning = F}
+# updated 1/31/2020 to accommodate V3.1
+# updated 2/4/2020 to output "NA" for genes not detected in certain subgroups
+# https://github.com/Ryan-Zhu
+
+
+PrctCellExpringGene <- function(object, genes, group.by = "all"){
+  if(group.by == "all"){
+    prct = unlist(lapply(genes,calc_helper, object=object))
+    result = data.frame(Markers = genes, Cell_proportion = prct)
+    return(result)
+  }
+  
+  else{        
+    list = SplitObject(object, group.by)
+    factors = names(list)
+    
+    results = lapply(list, PrctCellExpringGene, genes=genes)
+    for(i in 1:length(factors)){
+      message(factors[i])
+      results[[i]]$Feature = factors[i]
+    }
+    combined = do.call("rbind", results)
+    return(combined)
+  }
+}
+
+calc_helper <- function(object,genes){
+  counts = object[['RNA']]@counts
+  ncells = ncol(counts)
+  if(genes %in% row.names(counts)){
+    sum(counts[genes,]>0)/ncells
+  }else{return(NA)}
+}
+
+
+```
+
+
+```{r loaddata, message = FALSE, cache = TRUE}
+
+## Load 10X scRNA-seq datas
+
+j0.data <- Read10X(data.dir = "../data/J0/outs/filtered_feature_bc_matrix/")
+D0 <- CreateSeuratObject(counts = j0.data, project = "hPSC", min.cells = 3, 
+                            min.features = 200)
+j8.data <- Read10X(data.dir = "../data/J8/outs/filtered_feature_bc_matrix/")
+D8 <- CreateSeuratObject(counts = j8.data, project = "ECI", min.cells = 3, 
+                         min.features = 200)
+j15good.data <- Read10X(data.dir = "../data/J15good/outs/filtered_feature_bc_matrix/")
+D15 <- CreateSeuratObject(counts = j15good.data, project = "ECII", min.cells = 3,
+                           min.features = 200)
+P0.data <- Read10X(data.dir = "../data/MJ_FC3000/P0FC3000/outs/filtered_feature_bc_matrix/")
+P0 <- CreateSeuratObject(counts = P0.data, project = "BKI", min.cells = 3, 
+                         min.features = 200)
+HPEK.data <- Read10X(data.dir = "../data/MJ_FC3000//HPEKFC3000/outs/filtered_feature_bc_matrix/")
+HPEK <- CreateSeuratObject(counts = HPEK.data, project = "HPEK", min.cells = 3,
+                           min.features = 200)
+```
+
+```{r loaddata2, echo = TRUE, cache = TRUE}
+
+# Aggr <- merge(P0, c( HPEK, D0, D8, D15), 
+#               add.cell.ids=c("P0", "HPEK", "D0", "D8", "D15"))
+# 
+# Aggr$orig.ident <- factor(x = Aggr$orig.ident, levels = c("D0", "D8", "D15", "P0", "HPEK"))
+# 
+# my.cols <- c("D0" = "#F8766D", 'D8'="#00C19A", 'D15' = "#ABA300", 'P0' = "#ED68ED", 'HPEK' = "#00A9FF")
+
+Aggr <- merge(P0, c( HPEK, D0, D8, D15), 
+              add.cell.ids=c("BKI", "HPEK", "hPSC", "ECI", "ECII"))
+
+Aggr$orig.ident <- factor(x = Aggr$orig.ident, levels = c("hPSC", "ECI", "ECII", "BKI", "HPEK"))
+
+my.cols <- c("hPSC" = "#F8766D", 'ECI'="#00C19A", 'ECII' = "#ABA300", 'BKI' = "#ED68ED", 'HPEK' = "#00A9FF")
+
+```
+
+```{r rmlist, echo = FALSE}
+rm(D0)
+rm(D8)
+rm(D15)
+rm(P0)
+rm(HPEK)
+rm(j0.data)
+rm(j8.data)
+rm(j15good.data)
+rm(P0.data)
+rm(HPEK.data)
+```
+
+# Quality - Control
+
+The steps below encompass the standard pre-processing workflow for scRNA-seq data in Seurat. These represent the selection and filtration of cells based on QC metrics, data normalization and scaling, and the detection of highly variable features. 
+
+Seurat allows you to easily explore QC metrics and filter cells based on any user-defined criteria. A few QC metrics commonly used by the community include : 
+
+- The number of unique genes detected in each cell : Low-quality cells or empty droplets will often have very few genes. Cell doublets or multiplets may exhibit an aberrantly high gene count. 
+- Similarly, the total number of molecules detected within a cell (correlates strongly with unique genes). 
+- The percentage of reads that map to the mitochondrial genome : Low-quality / dying cells often exhibit extensive mitochondrial contamination. 
+
+        
+## RawData
+
+
+```{r informationAggr, message = FALSE}
+
+Aggr
+```
+
+Here, there are `r sum(table(Idents(Aggr)))` single cells that were sequenced on the Illumina NextSeq 500.  
+The Read10X() function reads in the output of the cellranger pipeline from 10X, returning a unique molecular identified ( ~ UMI) count matrix. The values in this matrix represent the number of molecules for each feature ( ~ Gene) that are detected in each cell. 
+
+- Number of cells per samples : 
+
+```{r cellbysample1, echp = TRUE, results = 'hide'}
+table(Idents(Aggr))
+```
+
+```{r cellbysamples, echo = FALSE, include = TRUE}
+IdentRAW <- t(table(Idents(Aggr)))
+IdentRAW %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+- Knee Plot : 
+
+```{r kneeplot10, echo = TRUE, fig.align= "center", dpi=300}
+Aggr <- CalculateBarcodeInflections(Aggr)
+
+BarcodeInflectionsPlot(Aggr)
+
+```
+
+```{r MTinfo, echo = TRUE, results = 'hide', fig.align= "center", dpi=300}
+
+Aggr[["percent.mt"]] <- PercentageFeatureSet(Aggr, pattern = "^MT-")
+
+colnames(Aggr@meta.data)[2:3] <- c("nUMI", "nGene")
+
+head(Aggr@meta.data)
+```
+
+```{r DT1, echo = F, include = TRUE }
+sample_n(Aggr@meta.data,6) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c( "hover", "condensed"),
+                font_size = 14, position = "center") %>%
+  row_spec(0, background = "#adc5e2", bold = T)
+
+# datatable(head(Aggr@meta.data, 20), class = "hover compact", 
+#           options = list(pageLength = 5,
+#                            initComplete = JS(
+#     "function(settings, json) {",
+#     "$(this.api().table().header()).css({'background-color': '#adc5e2', 'color': '#000'});",
+#     "}"))) 
+
+  #formatStyle(row = 1, color = "#adc5e2")
+```
+
+
+```{r Vln1b, fig.align='center', echo = T, include = TRUE, dpi=300}
+VlnPlot(Aggr, features = c("nGene", "nUMI", "percent.mt"),  
+        pt.size = 0.1, ncol = 3, group.by = "orig.ident") 
+```
+
+
+```{r Vln15b, fig.align='center', echo = T, include = TRUE, dpi=300}
+plot1 <- FeatureScatter(Aggr, feature1 = "nUMI", feature2 = "percent.mt") 
+plot2 <- FeatureScatter(Aggr, feature1 = "nUMI", feature2 = "nGene") 
+
+plot1 + plot2
+
+```
+
+## Data Filters
+
+With this QC metrics, To filter out the bulk of the poor quality cells, we filter out : 
+
+- Cells that have unique feature ( gene ) counts over 7,500 or less than 1,000, 
+
+- Cells that have > 15% mitochondrial counts. 
+
+    
+```{r filter1, results = 'hide'}
+Aggr.filtered <- subset(Aggr, 
+                         subset = nGene > 1000 & nGene < 7500 & percent.mt < 15)
+
+table(Idents(Aggr.filtered))
+```
+
+```{r DT2, echo = FALSE, include = TRUE}
+IdentFILT1 <- t(table(Idents(Aggr.filtered)))
+
+IdentFinale <- rbind(IdentRAW, IdentFILT1)
+rownames(IdentFinale) <- c("Raw","1st_filters")
+
+IdentFinale %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+
+```{r filter2b, echo = TRUE, message = FALSE, fig.align='center', dpi=300}
+VlnPlot(Aggr.filtered, features = c("nGene", "nUMI", "percent.mt"),  
+        pt.size = 0.1, ncol = 3, group.by = "orig.ident") 
+```
+
+Relation between nUMI and nGene detected : 
+
+```{r graph1b, echo = TRUE, message = FALSE, fig.align='center', dpi=300}
+p1 <- ggplot(Aggr.filtered@meta.data, aes(x=nUMI, y=nGene)) + 
+  geom_point() + geom_smooth(method="lm") 
+p1 <- ggMarginal(p1, type = "histogram", fill="lightgrey")
+
+p2 <- ggplot(Aggr.filtered@meta.data, aes(x=log10(nUMI), y=log10(nGene))) + 
+  geom_point() + geom_smooth(method="lm") 
+p2 <- ggMarginal(p2, type = "histogram", fill="lightgrey")
+
+plot_grid(plotlist = list(p1,p2), ncol=2, align='h', rel_widths = c(1, 1))
+
+```
+
+### Filtering cells based on percentage of mitochondrial transcripts 
+
+We applied a high and low median absolute deviation (MAD) thresholds to exclude outlier cells. MAD is a measure of statistical dispersion and a robust measure of variability in a univariate sample of quantitative data. : 
+
+```{r filter3, echo = TRUE, message = FALSE, fig.align='center', dpi=300}
+max.mito.thr <- median(Aggr.filtered@meta.data$percent.mt) + 3*mad(Aggr.filtered@meta.data$percent.mt)
+min.mito.thr <- median(Aggr.filtered@meta.data$percent.mt) - 3*mad(Aggr.filtered@meta.data$percent.mt)
+
+p1 <- ggplot(Aggr.filtered@meta.data, aes(x=nGene, y=percent.mt)) +
+  geom_point() +
+  geom_hline(aes(yintercept = max.mito.thr), colour = "firebrick", linetype = 2) +
+  geom_hline(aes(yintercept = min.mito.thr), colour = "firebrick", linetype = 2) +
+  annotate(geom = "text", label = paste0(
+        as.numeric(table(Aggr.filtered@meta.data$percent.mt > max.mito.thr |
+                           Aggr.filtered@meta.data$percent.mt < min.mito.thr)[2]),
+        " cells removed\n",
+        as.numeric(table(Aggr.filtered@meta.data$percent.mt > max.mito.thr |
+                           Aggr.filtered@meta.data$percent.mt < min.mito.thr)[1]),
+        " cells remain"), x = 6000, y = 0.1)
+
+Tremoved1 <- table(Aggr.filtered@meta.data$percent.mt > max.mito.thr |                           Aggr.filtered@meta.data$percent.mt < min.mito.thr)[2]
+
+Tconserved1 <- table(Aggr.filtered@meta.data$percent.mt > max.mito.thr |
+                           Aggr.filtered@meta.data$percent.mt < min.mito.thr)[1]
+
+ggMarginal(p1, type = "histogram", fill="lightgrey", bins=100)
+
+```
+
+`r Tremoved1` cells are removed. 
+
+```{r filter4, echo = TRUE, results = 'hide'}
+Aggr.filtered <- subset(Aggr.filtered, subset = percent.mt > min.mito.thr & 
+                          percent.mt < max.mito.thr)
+
+table(Idents(Aggr.filtered))
+```
+
+```{r DT3, echo = FALSE, include = TRUE}
+IdentFILT2 <- t(table(Idents(Aggr.filtered)))
+
+IdentFinale <- rbind(IdentFinale, IdentFILT2)
+rownames(IdentFinale)[3] <- c("2nd_filters")
+
+IdentFinale %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+### Filtering cells based on number of genes and transcripts detected 
+
+- Remove cells with to few gene detected or with to many UMI counts. 
+
+We filter cells which are likely to be doublet based on their higher content of transcript detected as well as cell with to few genes/UMI sequenced. 
+
+Set low and hight thresholds on the number of detected genes and set hight threshold on the number of transcripts ( UMI ) with median absolute deviation : 
+
+```{r filter5, echo = TRUE, message = FALSE, fig.align='center', dpi=300}
+min.Genes.thr <- median(log10(Aggr.filtered@meta.data$nGene)) -
+                                3*mad(log10(Aggr.filtered@meta.data$nGene))
+max.Genes.thr <- median(log10(Aggr.filtered@meta.data$nGene)) +
+                                3*mad(log10(Aggr.filtered@meta.data$nGene))
+
+max.nUMI.thr <- median(log10(Aggr.filtered@meta.data$nUMI)) +
+                                3*mad(log10(Aggr.filtered@meta.data$nUMI))
+
+
+p1 <- ggplot(Aggr.filtered@meta.data, aes(x=log10(nUMI), y=log10(nGene))) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  geom_hline(aes(yintercept = min.Genes.thr), colour = "forestgreen", linetype = 2) +
+  geom_hline(aes(yintercept = max.Genes.thr), colour = "forestgreen", linetype = 2) +
+  geom_vline(aes(xintercept = max.nUMI.thr), colour = "firebrick", linetype = 2)
+
+ggMarginal(p1, type = "histogram", fill="lightgrey")
+```
+
+```{r filter6, echo = TRUE, results = 'hide'}
+Aggr.filtered <- subset(Aggr.filtered, 
+                        subset = nGene > 10^min.Genes.thr & nUMI < 10^max.nUMI.thr)
+
+table(Idents(Aggr.filtered))
+```
+
+```{r DT4, echo = FALSE, include = TRUE}
+IdentFILT3 <- t(table(Idents(Aggr.filtered)))
+
+IdentFinale <- rbind(IdentFinale, IdentFILT3)
+rownames(IdentFinale)[4] <- c("3rd_filters")
+
+IdentFinale %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r filter7, echo = TRUE, message = FALSE, fig.align='center', dpi=300}
+lm.model <- lm(data = Aggr.filtered@meta.data, formula = log10(nGene) ~ log10(nUMI))
+
+p2 <- ggplot(Aggr.filtered@meta.data, aes(x=log10(nUMI), y=log10(nGene))) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  geom_hline(aes(yintercept = min.Genes.thr), colour = "forestgreen", linetype = 2) +
+  geom_hline(aes(yintercept = max.Genes.thr), colour = "forestgreen", linetype = 2) +
+  geom_vline(aes(xintercept = max.nUMI.thr), colour = "firebrick", linetype = 2) +
+  geom_abline(intercept = lm.model$coefficients[1] - 0.09 , slope = lm.model$coefficients[2], color="tan1") +
+  annotate(geom = "text", label = paste0(dim(Aggr.filtered@meta.data)[1], " QC passed cells"), x = 4, y = 3.8)
+
+Tremoved2 <- Tconserved1 - dim(Aggr.filtered@meta.data)[1]
+
+ggMarginal(p2, type = "histogram", fill="lightgrey")
+```
+
+`r Tremoved2` cells are removed. 
+
+### Filter cells below the main population nUMI/nGene relationship. 
+
+Cells to exclude lie below an intersept offset of -0.09 :
+
+```{r filter8, echo = TRUE, message = FALSE, fig.align='center', dpi=300}
+
+Aggr.filtered@meta.data$valideCells <- log10(Aggr.filtered@meta.data$nGene) > (log10(Aggr.filtered@meta.data$nUMI) * lm.model$coefficients[2] + (lm.model$coefficients[1] - 0.09))
+
+p3 <- ggplot(Aggr.filtered@meta.data, aes(x=log10(nUMI), y=log10(nGene))) +
+  geom_point(aes(colour = valideCells)) +
+  geom_smooth(method="lm") + 
+  geom_abline(intercept = lm.model$coefficients[1] - 0.09 , slope = lm.model$coefficients[2], color="tan1") + 
+  theme(legend.position="none") +
+  annotate(geom = "text", label = paste0(as.numeric(table(Aggr.filtered@meta.data$valideCells)[2]), " QC passed cells\n",
+                                         as.numeric(table(Aggr.filtered@meta.data$valideCells)[1]), " QC filtered"), 
+           x = 4, y = 3.8)
+
+Tremoved3 <- table(Aggr.filtered@meta.data$valideCells)[1]
+
+ggMarginal(p3, type = "histogram", fill="lightgrey")
+```
+
+`r Tremoved3` cells are removed. 
+
+
+## Final Data
+
+```{r filter26, echo = TRUE, results = 'hide'}
+Aggr.filtered <- subset(Aggr.filtered, 
+                        subset = valideCells %in% TRUE)
+
+table(Idents(Aggr.filtered))
+```
+
+```{r DT27, echo = FALSE, include = TRUE}
+IdentFILT4 <- t(table(Idents(Aggr.filtered)))
+
+IdentFinale <- rbind(IdentFinale, IdentFILT4)
+rownames(IdentFinale)[5] <- c("4th_filters")
+
+IdentFinale %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r download, echo = F}
+
+iddt <- as.data.frame.matrix(IdentFinale)
+iddt <- setDT(iddt, keep.rownames = TRUE)[]
+iddt <- as.data.frame(iddt)
+
+iddt %>%
+  download_this(
+    output_name = "NGSsc02and69_FC3000_summary_Filters_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download Filters informations as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+```{r img28, echo = TRUE, message = FALSE, fig.align='center', dpi=300}
+VlnPlot(Aggr.filtered, features = c("nGene", "nUMI", "percent.mt"), 
+        pt.size = 0.1, ncol = 3, group.by = "orig.ident") 
+```
+
+```{r img29, echo = TRUE, message = FALSE, fig.align='center', dpi=300}
+p4 <- ggplot(Aggr.filtered@meta.data, aes(x=log10(nUMI), y=log10(nGene))) + 
+  geom_smooth(method="lm") +
+  geom_point(mapping = aes(color = orig.ident), alpha = 0.5)
+
+ggMarginal(p4, type = "histogram", fill="lightgrey")
+
+```
+
+
+
+# Samples descriptions
+
+<!-- ## Intergration & Normalization -->
+## Normalization 
+
+<!-- The joint analysis of two or more single-cell datasets poses unique challenges. In particular, identifying cell populations that are present across multiple datasets can be problematic under standard workflows. Seurat v4 includes a set of methods to match shared cell populations across datasets. These methods first identify cross-dataset pairs of cells that are in a matched biological state (‘anchors’), can be used both to correct for technical differences between datasets (i.e. batch effect correction), and to perform comparative scRNA-seq analysis of across experimental conditions ( _Stuart, Butler et al, 2019_ ). -->
+
+Biological heterogeneity in single-cell RNA-seq data is often confounded by technical factors including sequencing depth. The number of molecules detected in each cell can vary significantly between cells, even within the same celltype. Interpretation of scRNA-seq data requires effective pre-processing and normalization to remove this technical variability. In _Hafemeister and Satija, 2019_ they introduce a modeling framework for the normalization and variance stabilization of molecular count data from scRNA-seq experiment. This procedure omits the need for heuristic steps including pseudocount addition or log-transformation and improves common downstream analytical tasks such as variable gene selection, dimensional reduction, and differential expression. 
+
+```{r normalization32, echo = TRUE, message = FALSE, warning = FALSE, cache = TRUE, results = 'hide'}
+
+Aggr.filt.norm <- SCTransform(Aggr.filtered, vars.to.regress = "percent.mt")
+
+```
+
+```{r rmlist32, echo = FALSE}
+
+#saveRDS(Aggr.filt.norm, file = "./NGSsc02and69_Aggr-filt-norm_FC3000.rds")
+
+rm(Aggr)
+rm(Aggr.filtered)
+
+```
+
+```{r FindVariable33, echo = TRUE, message = FALSE, warning = FALSE, fig.align= "center", dpi=300}
+# Identify the 20 most highly variable genes
+top20 <- head(VariableFeatures(Aggr.filt.norm), 20)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(Aggr.filt.norm)
+plot2 <- LabelPoints(plot = plot1, points = top20, repel = TRUE)
+plot2
+
+```
+
+## Cell-Cycle score 
+
+Seurat has a function for calculating cell cycle scores based on a list of know S-phase and G2/M-phase genes. 
+
+```{r cellcylcescoring, echo = TRUE, message = FALSE, fig.align='center', warning = FALSE, dpi=300}
+Aggr.filt.norm.CCS <- CellCycleScoring(
+  object = Aggr.filt.norm,
+  g2m.features = cc.genes$g2m.genes,
+  s.features = cc.genes$s.genes
+)
+
+VlnPlot(Aggr.filt.norm.CCS, features = c("S.Score","G2M.Score"),  
+        pt.size = 0.1, sort = "increasing", cols = my.cols)
+
+```
+
+## Pluripotency score
+
+<i>Homo sapiens</i> : [GO:0019827](https://www.ebi.ac.uk/QuickGO/term/GO:0019827) , 131 genes.
+
+Calculate the average expression levels of each sample on single cell level, subtracted by the aggregated expression of control feature sets. All analyzed features are binned based on averaged expression, and the control features are randomly selected from each bin.
+
+The score is the difference between the average expression levels of each gene set and random control genes. There is no physical meaning to the actual scores. 
+A positive score would suggest that this set of genes is expressed in a particular cell more highly than would be expected, given the average expression of this set across the population.
+
+```{r DTGO, echo = FALSE, include = TRUE}
+plury.dt <- read.csv2("./GO_0019827_human_stem-cell-population-maintenance.csv", header = F, sep = "\t") 
+plury.dt <- plury.dt[, c(2, 3)]
+colnames(plury.dt) <- c("Gene_symbol", "Description")
+
+head(plury.dt) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r downloadGO, echo = F}
+
+plury.dt <- as.data.frame.matrix(plury.dt)
+plury.dt <- setDT(plury.dt, keep.rownames = TRUE)[]
+plury.dt <- as.data.frame(plury.dt)
+
+plury.dt %>%
+  download_this(
+    output_name = "Pluripotency_geneslist",
+    output_extension = ".xlsx",
+    button_label = "Download Pluripotency genes as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+```{r pluripotencescoring, echo = TRUE, message = FALSE, fig.align='center', warning = FALSE, dpi=300}
+
+
+pluripotency.genes <- list(c("ZNF706", "MMP24", "NOTCH2", "TET1", "RBPJ", "MED28", "FOXO3", "LIG4", "EIF4ENIF1", "PAX8", "ZNF322", "MCPH1", "MTF2", "NR2E1", "FZD7", "SAV1", "SIX2", "MED14", "SPI1", "KDM2B", "MED7", "ZHX2", "WNT9B", "TP63", "HES1", "TAL1", "HMGA2", "SMC1A", "PADI4", "ZNF358", "RIF1", "LIN28A", "NANOG", "MED6", "ZFP36L2", "KIT", "RAF1", "NOG", "POU5F1", "CDH2", "HESX1", "KLF4", "LRP5", "CNOT3", "TAF6L", "KDM3A", "URS0000527F89_9606", "STAT3", "LDB2", "TAF5L", "FGF10", "CNOT2", "IGF2BP1", "PHF19", "METTL14", "WDR43", "PAX2", "DDX6", "TRIM8", "SALL4", "LDB1", "CUL4A", "METTL3", "RTF1", "PIWIL2", "HOOK3", "NOTCH1", "MED30", "DIS3L2", "SMC5", "YAP1", "PCM1", "MED21", "SRRT", "NANOS2", "GATA2", "SETD6", "JAG1", "BMPR1A", "FANCC", "DLL1", "GNL3", "FGF4", "PAF1", "LBH", "SFRP1", "PROX1", "EIF4E", "PTN", "VPS72", "MED12", "TCF15", "LIF", "MED27", "CNOT1", "CDC73", "TPT1", "CTNNB1", "MYC", "LOXL2", "BMP7", "SMO", "SS18", "HES5", "LEO1", "SOX9", "SOX2", "KAT2A", "ESRRB", "NCOA3", "ASPM", "BCL9", "CDX2", "ELAVL1", "ASCL2", "TUT4", "WNT7A", "NIPBL", "NODAL", "PRDM14", "REST", "PELO", "SKI", "ZC3H13", "PRRX1", "SMC3", "SOX4", "CTR9", "KLF10", "TBX3", "LSM1"))
+
+
+Aggr.filt.norm.pluri <- AddModuleScore(Aggr.filt.norm, features = pluripotency.genes, name = "Pluripotency.Score", seed = 1, ctrl = 50)
+
+colnames(Aggr.filt.norm.pluri@meta.data)[ncol(Aggr.filt.norm.pluri@meta.data)] <- "Pluripotency.Score"
+
+
+VlnPlot(Aggr.filt.norm.pluri, features = "Pluripotency.Score",  
+        pt.size = 0.1, sort = "increasing", cols = my.cols) + 
+  theme(legend.position = 'none')
+
+```
+
+## Keratinocyte differentiation score
+
+<i>Homo sapiens</i> (142 genes) : 
+
+- [GO:0003334](https://www.ebi.ac.uk/QuickGO/term/GO:0003334) / [GO:0003335](https://www.ebi.ac.uk/QuickGO/term/GO:0003335) / [GO:0003336](https://www.ebi.ac.uk/QuickGO/term/GO:0003336) / [GO:0030216](https://www.ebi.ac.uk/QuickGO/term/GO:0030216) / [GO:0031424](https://www.ebi.ac.uk/QuickGO/term/GO:0031424) / [GO:0032980](https://www.ebi.ac.uk/QuickGO/term/GO:0032980) / [GO:0045616](https://www.ebi.ac.uk/QuickGO/term/GO:0045616) / [GO:0045617](https://www.ebi.ac.uk/QuickGO/term/GO:0045617) / [GO:0045618](https://www.ebi.ac.uk/QuickGO/term/GO:0045618) / [GO:0070268](https://www.ebi.ac.uk/QuickGO/term/GO:0070268) 
+
+
+```{r keratoscoring, echo = FALSE, message = FALSE}
+
+kerato.dt <- read.csv2("./KeratocyteDiff_list_GOterm2.csv", header = T, sep = "\t")
+kerato.genes <- list(c(kerato.dt$Gene_symbol))
+
+```
+
+```{r DTGO2, echo = FALSE, include = TRUE}
+
+head(kerato.dt) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r downloadGO2, echo = F}
+
+kerato.dt2 <- as.data.frame.matrix(kerato.dt)
+kerato.dt2 <- setDT(kerato.dt2, keep.rownames = TRUE)[]
+kerato.dt2 <- as.data.frame(kerato.dt2)
+
+kerato.dt2 %>%
+  download_this(
+    output_name = "Kerato_diff_geneslist",
+    output_extension = ".xlsx",
+    button_label = "Download Keratocytes genes as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+ 
+ 
+```{r keratoscoringb, echo = TRUE, message = FALSE, fig.align='center', warning = FALSE, dpi=300}
+
+Aggr.filt.norm.kerato <- AddModuleScore(Aggr.filt.norm, features = kerato.genes, name = "Score for keratinocyte GO term", seed = 1, ctrl = 50)
+
+colnames(Aggr.filt.norm.kerato@meta.data)[ncol(Aggr.filt.norm.kerato@meta.data)] <- "Score for keratinocyte GO term"
+
+
+VlnPlot(Aggr.filt.norm.kerato, features = "Score for keratinocyte GO term",  
+        pt.size = 0.1, sort = "decreasing", cols = my.cols) + 
+  theme(legend.position = 'none',
+        axis.title.x = element_blank())
+
+```
+
+
+```{r rmlist35, echo = FALSE}
+rm(Aggr.filt.norm.CCS)
+rm(Aggr.filt.norm.pluri)
+rm(Aggr.filt.norm.kerato)
+```
+
+# PCA
+
+Only the previously determined variable features are used as input, but can be defined using features argument if you wish to choose a different subset.
+
+```{r PCA35, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi=300}
+
+Aggr.filt.norm <- RunPCA(Aggr.filt.norm, 
+                         features = VariableFeatures(object = Aggr.filt.norm))
+
+print(Aggr.filt.norm[["pca"]], dims = 1:5, nfeatures = 5)
+
+VizDimLoadings(Aggr.filt.norm, dims = 1:2, reduction = "pca")
+
+DimPlot(Aggr.filt.norm, reduction = "pca", cols = my.cols)
+
+```
+ 
+ 
+DimHeatmap function allows for easy exploration of the primary sources of heterogeneity in a dataset, and can be useful when trying to decide which PCs to include for further downstream analyses. 
+Both cells and genes are ordered according to their PCA scores. Setting cells to a number plots the 'extreme' cells on both ends of the spectrum, which dramatically speeds plotting for large datasets. Though clearly a supervised analysis, we find this to be a valuable tool for exploring correlated feature sets. 
+
+- PC1 : 
+
+```{r heatmap37, echo = TRUE, fig.align= "center", dpi=300}
+
+DimHeatmap(Aggr.filt.norm, dims = 1, cells = 500, balanced = TRUE, fast = FALSE) +
+    scale_fill_gradientn(colors = c("steelblue", "lightgray", "firebrick"))
+```
+
+- PC2 : 
+
+```{r heatmap38, echo = TRUE, fig.align= "center", dpi=300}
+DimHeatmap(Aggr.filt.norm, dims = 2, cells = 500, balanced = TRUE, fast = FALSE) +
+    scale_fill_gradientn(colors = c("steelblue", "lightgray", "firebrick"))
+
+```
+
+```{r pca47, echo = TRUE, fig.align= "center", dpi=300}
+FeaturePlot(Aggr.filt.norm, features = c("NANOG"), 
+            reduction = "pca", cols = c("cadetblue3", "brown2"))
+FeaturePlot(Aggr.filt.norm, features = c("POU5F1"), 
+            reduction = "pca", cols = c("cadetblue3", "brown2"))
+FeaturePlot(Aggr.filt.norm, features = c("KRT8"), 
+            reduction = "pca", cols = c("cadetblue3", "brown2"))
+FeaturePlot(Aggr.filt.norm, features = c("KRT18"), 
+            reduction = "pca", cols = c("cadetblue3", "brown2"))
+FeaturePlot(Aggr.filt.norm, features = c("KRT5"), 
+            reduction = "pca", cols = c("cadetblue3", "brown2"))
+FeaturePlot(Aggr.filt.norm, features = c("KRT14"), 
+            reduction = "pca", cols = c("cadetblue3", "brown2"))
+
+```
+
+# UMAP
+
+Seurat offers several non-linear dimensional reduction techniques, such as tSNE and UMAP, to visualize and explore these datasets. The goal of these algorithms is to learn the underlying manifold of the data in order to place similar cells together in low-dimensional space.
+
+In the standard Seurat workflow the authors focus on "small numbers" of PCs. Interestingly, they’ve found that when using sctransform, they often benefit by pushing this parameter even higher. they believe this is because the sctransform workflow performs more effective normalization, strongly removing technical effects from the data. 
+
+Non-linear dimensional reduction : 
+
+```{r UMAP39, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi=300}
+Aggr.filt.norm <- RunUMAP(Aggr.filt.norm, dims = 1:30)
+
+DimPlot(Aggr.filt.norm, reduction = "umap", label = TRUE, cols = my.cols)  + 
+  theme(legend.position = 'none')
+
+```
+ 
+# DEG
+
+## Finding differentially expressed features (samples biomarkers) 
+
+### D8 vs D0 : 
+
+```{r MarkersD8D0, echo = T, message = F, warning = F, cache = T}
+
+D8vsD0.markers  <- FindMarkers(Aggr.filt.norm, ident.1 = "ECI", ident.2 = "hPSC",
+                               logfc.threshold = 0, 
+                               only.pos = FALSE, min.pct = 0,)
+
+```
+
+
+```{r markersD8D0_2, echo = FALSE, include = TRUE}
+
+head(D8vsD0.markers) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r download_D8D0, echo = F}
+
+dt <- as.data.frame(D8vsD0.markers)
+dt <- setDT(dt, keep.rownames = TRUE)[]
+dt <- as.data.frame(dt)
+
+dt %>%
+  download_this(
+    output_name = "NGSsc02and69_FC3000_BioMarqueurs_D8-D0_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download BioMarkers D8 vs D0 (no thresholds) as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+### D15 vs D0 : 
+
+```{r MarkersD15D0, echo = T, message = F, warning = F, cache = T}
+
+D15vsD0.markers  <- FindMarkers(Aggr.filt.norm, ident.1 = "ECII", ident.2 = "hPSC",
+                               logfc.threshold = 0, 
+                               only.pos = FALSE, min.pct = 0,)
+
+```
+
+
+```{r markersD15D0_2, echo = FALSE, include = TRUE}
+
+head(D15vsD0.markers) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r download_D15D0, echo = F}
+
+dt <- as.data.frame(D15vsD0.markers)
+dt <- setDT(dt, keep.rownames = TRUE)[]
+dt <- as.data.frame(dt)
+
+dt %>%
+  download_this(
+    output_name = "NGSsc02and69_FC3000_BioMarqueurs_D15-D0_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download BioMarkers D15 vs D0 (no thresholds) as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+### P0 vs D0 : 
+
+```{r MarkersDP0D0, echo = T, message = F, warning = F, cache = T}
+
+P0vsD0.markers  <- FindMarkers(Aggr.filt.norm, ident.1 = "BKI", ident.2 = "hPSC",
+                               logfc.threshold = 0, 
+                               only.pos = FALSE, min.pct = 0,)
+
+```
+
+
+```{r markersP0D0_2, echo = FALSE, include = TRUE}
+
+head(P0vsD0.markers) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r download_P0D0, echo = F}
+dt <- as.data.frame(P0vsD0.markers)
+dt <- setDT(dt, keep.rownames = TRUE)[]
+dt <- as.data.frame(dt)
+
+dt %>%
+  download_this(
+    output_name = "NGSsc02and69_FC3000_BioMarqueurs_P0-D0_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download BioMarkers P0 vs D0 (no thresholds) as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+### HPEK vs D0 : 
+
+```{r MarkersHPEKD0, echo = T, message = F, warning = F, cache = T}
+
+HPEKvsD0.markers  <- FindMarkers(Aggr.filt.norm, ident.1 = "HPEK", ident.2 = "hPSC",
+                               logfc.threshold = 0, 
+                               only.pos = FALSE, min.pct = 0,)
+
+```
+
+
+```{r markersHPEKD0_2, echo = FALSE, include = TRUE}
+
+head(HPEKvsD0.markers) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r download_HPEKD0, echo = F}
+
+dt <- as.data.frame(HPEKvsD0.markers)
+dt <- setDT(dt, keep.rownames = TRUE)[]
+dt <- as.data.frame(dt)
+
+dt %>%
+  download_this(
+    output_name = "NGSsc02and69_FC3000_BioMarqueurs_HPEK-D0_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download BioMarkers HPEK vs D0 (no thresholds) as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+## Cluster the cells 
+
+Seurat applies a graph-based clustering approach, building upon initial strategies in _Macosko et al_. Importantly, the distance metric which drives the clustering analysis (based on previously identified PCs) remains the same. It approach was heavily inspired by recent manuscripts which applied graph-based clustering approaches to scRNA-seq data _SNN-Cliq, Xu and Su, Bioinformatics, 2015_ and CyTOF data _PhenoGraph, Levine et al., Cell, 2015_. Briefly, these methods embed cells in a graph structure - for example a K-nearest neighbor (KNN) graph, with edges drawn between cells with similar feature expression patterns, and then attempt to partition this graph into highly interconnected ‘quasi-cliques’ or ‘communities’.
+
+As in PhenoGraph, the programm first construct a KNN graph based on the euclidean distance in PCA space, and refine the edge weights between any two cells based on the shared overlap in their local neighborhoods (Jaccard similarity).
+
+To cluster the cells, it next apply modularity optimization techniques such as the Louvain algorithm (default) or SLM _SLM, Blondel et al., Journal of Statistical Mechanics_, to iteratively group cells together, with the goal of optimizing the standard modularity function. The FindClusters() function implements this procedure, and contains a resolution parameter that sets the ‘granularity’ of the downstream clustering, with increased values leading to a greater number of clusters.
+
+```{r find39, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi=300}
+
+Aggr.filt.norm <- FindNeighbors(Aggr.filt.norm, dims = 1:30, verbose = FALSE)
+Aggr.filt.norm <- FindClusters(Aggr.filt.norm, verbose = FALSE)
+
+DimPlot(Aggr.filt.norm, reduction = "umap", label = TRUE) 
+
+#saveRDS(Aggr.filt.norm, "./NGSsc02and69_D0-D8-D15-P0-HPEK_seurat_afterClustering.rds")
+```
+
+```{r find40, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=14, fig.height=8, dpi=300}
+DimPlot(Aggr.filt.norm, reduction = "umap", label = TRUE, split.by = 'orig.ident')
+```
+
+
+## Cell-Cycle score 
+
+Seurat has a function for calculating cell cycle scores based on a list of know S-phase and G2/M-phase genes. 
+
+```{r cellcyclescore, echo = TRUE, message = FALSE, fig.align='center', warning = FALSE, dpi=300}
+Aggr.filt.norm.CCS <- CellCycleScoring(
+  object = Aggr.filt.norm,
+  g2m.features = cc.genes$g2m.genes,
+  s.features = cc.genes$s.genes
+)
+
+VlnPlot(Aggr.filt.norm.CCS, features = c("S.Score","G2M.Score"),  
+        pt.size = 0.1, sort = "increasing") + 
+  theme(legend.position = 'none')
+
+```
+
+
+## Pluripotency score
+
+<i>Homo sapiens</i> (131 genes) : 
+
+```{r pluripotencescoring2, echo = TRUE, message = FALSE, fig.align='center', warning = FALSE, dpi=300}
+
+Aggr.filt.norm.pluri <- AddModuleScore(Aggr.filt.norm, features = pluripotency.genes, name = "Pluripotency.Score", seed = 1, ctrl = 50)
+
+colnames(Aggr.filt.norm.pluri@meta.data)[ncol(Aggr.filt.norm.pluri@meta.data)] <- "Pluripotency.Score"
+
+
+VlnPlot(Aggr.filt.norm.pluri, features = "Pluripotency.Score",  
+        pt.size = 0.1, sort = "increasing") + 
+  theme(legend.position = 'none')
+
+```
+
+## Keratinocyte differentiation score
+
+<i>Homo sapiens</i> (142 genes) : 
+
+```{r keratoscoring2, echo = TRUE, message = FALSE, fig.align='center', warning = FALSE, dpi=300}
+
+Aggr.filt.norm.kerato <- AddModuleScore(Aggr.filt.norm, features = kerato.genes, name = "Score for keratinocyte GO term", seed = 1, ctrl = 50)
+
+colnames(Aggr.filt.norm.kerato@meta.data)[ncol(Aggr.filt.norm.kerato@meta.data)] <- "Score for keratinocyte GO term"
+
+
+VlnPlot(Aggr.filt.norm.kerato, features = "Score for keratinocyte GO term",  
+        pt.size = 0.1, sort = "decreasing") + 
+  theme(legend.position = 'none',
+        axis.text.x = element_blank()) 
+
+```
+
+
+```{r rmlistScore, echo = FALSE}
+rm(Aggr.filt.norm.CCS)
+rm(Aggr.filt.norm.pluri)
+rm(Aggr.filt.norm.kerato)
+```
+
+## Get number of cells per cluster and per sample of origin 
+
+```{r numbCell40, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi=300}
+
+numbCells <- table(Aggr.filt.norm@meta.data$seurat_clusters, 
+                   Aggr.filt.norm@meta.data$orig.ident)
+
+nbC <- as.data.frame.matrix(numbCells)
+nbC <- setDT(nbC, keep.rownames = TRUE)[]
+nbC <- as.data.frame(nbC)
+
+nbC.m <- melt(numbCells, id=c("rn"))
+colnames(nbC.m) <- c("Cluster","Sample", "cells_count")
+nbC.m$Cluster <- as.factor(nbC.m$Cluster)
+
+ggplot(data = nbC.m, mapping = aes(x = Sample, y = cells_count, fill = Cluster)) + 
+  geom_bar(position = "fill", stat = "identity")
+```
+
+```{r cellbysample41, echp = TRUE, results = 'hide'}
+numbCells
+```
+
+```{r cellbysamples41, echo = FALSE, include = TRUE}
+
+numbCells %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r download1, echo = F}
+
+nbC %>%
+  download_this(
+    output_name = "NGSsc02and69_FC3000_numbCells_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download data as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+## Finding differentially expressed features (cluster biomarkers) 
+
+Find markers for every cluster compared to all remaining cells, report only the positive ones. 
+```{r markers41, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", cache = TRUE}
+Aggr.filt.norm.markers <- FindAllMarkers(Aggr.filt.norm, 
+                                         only.pos = TRUE, min.pct = 0.25, 
+                                         logfc.threshold = 0.25)
+
+top10.markers <- Aggr.filt.norm.markers %>% group_by(cluster) %>% top_n(n = 10, 
+                                        wt = avg_log2FC)
+
+
+
+VlnPlot(Aggr.filt.norm, features = "NANOG", 
+        slot = "counts", pt.size = 0.1, log = TRUE) + 
+  theme(legend.position = 'none',
+        plot.title = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 18),
+        axis.title.y = element_text(size = 18))
+
+VlnPlot(Aggr.filt.norm, features ="POU5F1", 
+        slot = "counts", pt.size = 0.1, log = TRUE) + 
+  theme(legend.position = 'none',
+        plot.title = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 18),
+        axis.title.y = element_text(size = 18))
+
+VlnPlot(Aggr.filt.norm, features = "SOX2", 
+        slot = "counts", pt.size = 0.1, log = TRUE) + 
+  theme(legend.position = 'none',
+        plot.title = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 18),
+        axis.title.y = element_text(size = 18))
+```
+
+```{r markers412, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi=300}
+
+
+VlnPlot(Aggr.filt.norm, features = "NANOG", 
+        slot = "counts", pt.size = 0.1, log = TRUE, group.by = "orig.ident",
+        cols = my.cols) + 
+    theme(legend.position = 'none',
+        plot.title = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 18),
+        axis.title.y = element_text(size = 18))
+
+VlnPlot(Aggr.filt.norm, features = "POU5F1", 
+        slot = "counts", pt.size = 0.1, log = TRUE, group.by = "orig.ident",
+        cols = my.cols) + 
+    theme(legend.position = 'none',
+        plot.title = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 18),
+        axis.title.y = element_text(size = 18))
+
+VlnPlot(Aggr.filt.norm, features = "SOX2", 
+        slot = "counts", pt.size = 0.1, log = TRUE, group.by = "orig.ident",
+        cols = my.cols) + 
+    theme(legend.position = 'none',
+        plot.title = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 18),
+        axis.title.y = element_text(size = 18))
+```
+
+
+```{r VlnMarks, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi=300}
+VlnPlot(Aggr.filt.norm, features = "KRT8", group.by = "orig.ident",
+        slot = "counts", pt.size = 0.1, log = TRUE, 
+        cols = my.cols) +
+      theme(legend.position = 'none',
+        plot.title = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 18),
+        axis.title.y = element_text(size = 18))
+
+VlnPlot(Aggr.filt.norm, features = "KRT18", group.by = "orig.ident",
+        slot = "counts", pt.size = 0.1, log = TRUE, 
+        cols = my.cols) +
+      theme(legend.position = 'none',
+        plot.title = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 18),
+        axis.title.y = element_text(size = 18))
+
+VlnPlot(Aggr.filt.norm, features = "TP63", group.by = "orig.ident",
+        slot = "counts", pt.size = 0.1, log = TRUE, 
+        cols = my.cols) +
+        theme(legend.position = 'none',
+        plot.title = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 18),
+        axis.title.y = element_text(size = 18))
+
+VlnPlot(Aggr.filt.norm, features = "KRT5", group.by = "orig.ident",
+        slot = "counts", pt.size = 0.1, log = TRUE, 
+        cols = my.cols) +
+        theme(legend.position = 'none',
+        plot.title = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 18),
+        axis.title.y = element_text(size = 18))
+
+VlnPlot(Aggr.filt.norm, features = "KRT14", group.by = "orig.ident",
+        slot = "counts", pt.size = 0.1, log = TRUE, 
+        cols = my.cols) +
+        theme(legend.position = 'none',
+        plot.title = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 18),
+        axis.title.y = element_text(size = 18))
+
+VlnPlot(Aggr.filt.norm, features = "POU5F1", group.by = "orig.ident",
+        slot = "counts", pt.size = 0.1, log = TRUE, 
+        cols = my.cols) +
+        theme(legend.position = 'none',
+        plot.title = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 18),
+        axis.title.y = element_text(size = 18))
+
+VlnPlot(Aggr.filt.norm, features = "NANOG", group.by = "orig.ident",
+        slot = "counts", pt.size = 0.1, log = TRUE, 
+        cols = my.cols) +
+        theme(legend.position = 'none',
+        plot.title = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 18),
+        axis.title.y = element_text(size = 18))
+
+
+VlnPlot(Aggr.filt.norm, features = c("KRT14","KRT5"), group.by = "orig.ident",
+        slot = "counts", pt.size = 0.1, log = TRUE, 
+        cols = my.cols) 
+
+VlnPlot(Aggr.filt.norm, features = c("POU5F1", "NANOG"), group.by = "orig.ident",
+        slot = "counts", pt.size = 0.1, log = TRUE, 
+        cols = my.cols) 
+
+VlnPlot(Aggr.filt.norm, features = "FABP5", group.by = "orig.ident",
+        slot = "counts", pt.size = 0.1, log = TRUE, 
+        cols = my.cols)
+
+```
+ 
+```{r FeaturePlot45, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi=300}
+
+FeaturePlot(Aggr.filt.norm, features = c("KRT5"))
+
+FeaturePlot(Aggr.filt.norm, features = c("FABP5"))
+
+```
+
+```{r FeaturePlot46, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi=300}
+
+FeaturePlot(Aggr.filt.norm, features = c("KRT14"))
+
+```
+
+```{r FeaturePlot47, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi=300}
+
+FeaturePlot(Aggr.filt.norm, features = c("KRT8"))
+
+```
+
+```{r FeaturePlot48, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi=300}
+
+FeaturePlot(Aggr.filt.norm, features = c("KRT18"))
+
+```
+
+```{r FeaturePlot49, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi=300}
+
+FeaturePlot(Aggr.filt.norm, features = c("TP63"))
+
+```
+
+```{r FeaturePlot50, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi=300}
+
+FeaturePlot(Aggr.filt.norm, features = c("NANOG"))
+
+```
+
+```{r FeaturePlot51, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", dpi=300}
+
+FeaturePlot(Aggr.filt.norm, features = c("POU5F1"))
+
+```
+
+```{r markers44, echp = TRUE, results = 'hide'}
+
+head(top10.markers)
+
+```
+
+```{r markers45, echo = FALSE, include = TRUE}
+
+head(top10.markers) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"), 
+                font_size = 14, position = "center") %>% 
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r download2, echo = F}
+list("All" = Aggr.filt.norm.markers, "top10" = top10.markers) %>%
+  download_this(
+    output_name = "NGSsc02and69_FC3000_BioMarqueurs_0-25_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download BioMarkers (0,25 thresholds) as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+```{r DoHeatmap47, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width = 24, fig.height=18, dpi=300}
+
+DoHeatmap(Aggr.filt.norm, features = top10.markers$gene) + 
+  scale_fill_gradientn(colors = c("steelblue", "lightgray", "firebrick"))
+
+```
+
+
+```{r KRT48, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=14, fig.height=8, dpi=300}
+
+#Aggr.filt.norm$orig.ident <- factor(x = Aggr.filt.norm$orig.ident, levels = c("D0", "D8", "D15", "P0", "HPEK"))
+
+KRT.genes <- grep(pattern = "^KRT", x = rownames(Aggr.filt.norm), value = T)
+
+DotPlot(Aggr.filt.norm, features = KRT.genes, assay = "RNA") +
+            guides(color = guide_colorbar(title = "Scaled Average Expression")) +
+            theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10 ))
+
+DotPlot(Aggr.filt.norm, features = KRT.genes, assay = "RNA", group.by = "orig.ident") +
+            guides(color = guide_colorbar(title = "Scaled Average Expression")) +
+            theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10 ))
+
+
+
+COL.genes <- grep(pattern = "^COL", x = rownames(Aggr.filt.norm), value = T)
+
+DotPlot(Aggr.filt.norm, features = COL.genes, assay = "RNA") +
+  guides(color = guide_colorbar(title = "Scaled Average Expression")) +
+  scale_colour_gradient2(low = "#fcf0f1", mid = "#f86368", high = "#b32d2e") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10 ))
+
+DotPlot(Aggr.filt.norm, features = COL.genes, assay = "RNA", group.by = "orig.ident") +
+  guides(color = guide_colorbar(title = "Scaled Average Expression")) +
+  scale_colour_gradient2(low = "#fcf0f1", mid = "#f86368", high = "#b32d2e") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10 ))
+
+
+
+diff.genes <- c("NANOG", "POU5F1", "KRT5", "KRT14")
+DotPlot(Aggr.filt.norm, features = diff.genes, assay = "RNA", group.by = "orig.ident") +
+  guides(color = guide_colorbar(title = "Scaled Average Expression")) + 
+  scale_colour_gradient2(low = "#f0f6fc", mid = "#3582c4", high = "#043959") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10 ))
+```
+
+```{r KRT48bis, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center", fig.width=8, fig.height=14, dpi=300}
+
+markers.genes <- c("KRT5", "KRT14", "TNC", "FABP5", "KCNJ15", "KRT17", "TIMP3", "ACTG2", "SNAI2", "IFI6", "MT1M", "MX1", "ISG15", "S100A4", "ITGA6", "LGALS1", "OXTR", "ACKR3", "IFI27", "CPE", "JAG1", "IGFBP6", "CAV1", "COL17A1", "COL5A2", "COL1A2", "KLF10")
+
+DotPlot(Aggr.filt.norm, features = markers.genes, assay = "RNA", group.by = "orig.ident") +
+  guides(color = guide_colorbar(title = "Scaled Average Expression")) + 
+  scale_colour_gradient2(low = "#edfaef", mid = "#00ba37", high = "#007017") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 16 ),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_text(size = 16)) +
+  coord_flip()
+
+
+```
+
+```{r VlnMarkerGene, echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center" , dpi=300}
+
+
+VlnPlot(Aggr.filt.norm, features = c(markers.genes[1:2]), 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols) 
+VlnPlot(Aggr.filt.norm, features = c(markers.genes[3:4]), 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols)
+VlnPlot(Aggr.filt.norm, features = c(markers.genes[5:6]), 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols)
+VlnPlot(Aggr.filt.norm, features = c(markers.genes[7:8]), 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols)
+VlnPlot(Aggr.filt.norm, features = c(markers.genes[9:10]), 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols)
+VlnPlot(Aggr.filt.norm, features = c(markers.genes[11:12]), 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols)
+VlnPlot(Aggr.filt.norm, features = c(markers.genes[13:14]), 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols)
+VlnPlot(Aggr.filt.norm, features = c(markers.genes[15:16]), 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols)
+VlnPlot(Aggr.filt.norm, features = c(markers.genes[17:18]), 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols)
+VlnPlot(Aggr.filt.norm, features = c(markers.genes[19:20]), 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols)
+VlnPlot(Aggr.filt.norm, features = c(markers.genes[21:22]), 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols)
+VlnPlot(Aggr.filt.norm, features = c(markers.genes[23:24]), 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols)
+VlnPlot(Aggr.filt.norm, features = c(markers.genes[25:26]), 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols)
+VlnPlot(Aggr.filt.norm, features = markers.genes[27], 
+          group.by = "orig.ident", 
+          slot = "counts", pt.size = 0.1, log = TRUE, cols = my.cols)
+
+```
+
+## Without thresholds
+
+```{r markers50, echo = TRUE, message = FALSE, warning = FALSE, cache = TRUE}
+
+
+Aggr.filt.norm.markers.seuil <- FindAllMarkers(Aggr.filt.norm,
+                                         only.pos = TRUE, min.pct = 0,
+                                         logfc.threshold = 0)
+
+write.table(Aggr.filt.norm.markers.seuil, file='./results/NGSsc02and69_aggr_FC3000_DEG.csv',
+            quote=FALSE, sep='\t', col.names = TRUE)
+```
+
+```{r markers51, echp = TRUE, results = 'hide'}
+
+head(Aggr.filt.norm.markers.seuil)
+
+```
+
+```{r markers52, echo = FALSE, include = TRUE}
+
+head(Aggr.filt.norm.markers.seuil) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"),
+                font_size = 14, position = "center") %>%
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r download3, echo = F}
+Aggr.filt.norm.markers.seuil %>%
+  download_this(
+    output_name = "NGSsc02and69_FC3000_BioMarqueurs_without_threshold_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download All BioMarkers as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+
+## Gene expression & proportions 
+
+### Average expression ( with SCT normalization )
+
+```{r DEG53, echo = TRUE, message = FALSE, warning = FALSE}
+
+avg <- AverageExpression(Aggr.filt.norm, group.by = 'orig.ident', verbose = T,
+                          slot = "counts")
+
+
+avg2 <- AverageExpression(Aggr.filt.norm, verbose = T, slot = "counts")
+
+```
+
+- By samples :
+
+```{r markers54, echp = TRUE, results = 'hide'}
+
+head(avg$SCT)
+
+```
+
+```{r markers55, echo = FALSE, include = TRUE}
+
+head(avg$SCT) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"),
+                font_size = 14, position = "center") %>%
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+- By clusters :
+
+```{r markers56, echp = TRUE, results = 'hide'}
+
+head(avg2$SCT)
+
+```
+
+```{r markers57, echo = FALSE, include = TRUE}
+
+head(avg2$SCT) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"),
+                font_size = 14, position = "center") %>%
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r download4, echo = F}
+dt <- as.data.frame(avg$SCT)
+dt <- setDT(dt, keep.rownames = TRUE)[]
+dt <- as.data.frame(dt)
+
+dt2 <- as.data.frame(avg2$SCT)
+dt2 <- setDT(dt2, keep.rownames = TRUE)[]
+dt2 <- as.data.frame(dt2)
+
+list("expression_by_samples" = dt, "expression_by_clusters" = dt2) %>%
+  download_this(
+    output_name = "NGSsc02and69_FC3000_average_expression_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download Average expression as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+### Percentage of total cells expressing a gene (raw counts > 0) 
+
+To determine the percentage of cells expressing each gene. We use a script attached to Seurat, made by a github contributor ( [Ryan-Zhu]( https://github.com/satijalab/seurat/issues/371 ) ) .
+
+```{r percent83, echo = TRUE, message = FALSE, warning = FALSE, cache = TRUE}
+
+perctAvg <- as.data.frame(matrix(nc = ncol(dt), nr = nrow(dt)))
+colnames(perctAvg) <- colnames(dt)
+perctAvg[ , 1] <- dt[ , 1]
+
+percent <- PrctCellExpringGene(Aggr.filt.norm ,genes = c(perctAvg[, 1]), group.by = "orig.ident")
+
+for (j in 2:ncol(perctAvg)){
+  perctAvg[, j] <- 100 * percent[which(percent$Feature %in% colnames(perctAvg)[j]), "Cell_proportion"]
+}
+```
+
+```{r percent84, echo = TRUE, message = FALSE, warning = FALSE, cache = TRUE}
+
+perctAvg2 <- as.data.frame(matrix(nc = ncol(dt2), nr = nrow(dt2)))
+colnames(perctAvg2) <- colnames(dt2)
+perctAvg2[ , 1] <- dt2[ , 1]
+
+percent2 <- PrctCellExpringGene(Aggr.filt.norm ,genes = c(perctAvg2[, 1]), group.by = "seurat_clusters")
+
+for (j in 2:ncol(perctAvg2)){
+  perctAvg2[, j] <- 100 * percent2[which(percent2$Feature %in% colnames(perctAvg2)[j]), "Cell_proportion"]
+}
+
+```
+
+
+- By samples :
+
+```{r markers84, echp = TRUE, results = 'hide'}
+
+head(perctAvg)
+
+```
+
+```{r markers85, echo = FALSE, include = TRUE}
+
+head(perctAvg) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"),
+                font_size = 14, position = "center") %>%
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+- By clusters :
+
+```{r markers86, echp = TRUE, results = 'hide'}
+
+head(perctAvg2)
+
+```
+
+```{r markers87, echo = FALSE, include = TRUE}
+
+head(perctAvg2) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"),
+                font_size = 14, position = "center") %>%
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r download88, echo = F}
+
+
+list("percentCells_by_samples" = perctAvg, "percentCells_by_clusters" = perctAvg2) %>%
+  download_this(
+    output_name = "NGSsc02-69_percent-of-cells_expression_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download Percent of cells expression as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+
+## Final DEGs file
+
+```{r DEG54, echo = TRUE, message = FALSE, warning = FALSE, cache = TRUE}
+
+DEG <- Aggr.filt.norm.markers.seuil
+nbr_clust <- length(unique(DEG$cluster))
+
+mat2 <- as.data.frame(matrix(nc = 5*nbr_clust + 1, nr = nrow(avg2$SCT)))
+colnames(mat2)[1] <- "Genes"
+mat2$Genes <- rownames(avg2$SCT)
+
+m <- 2
+for (i in 0:(nbr_clust - 1)){
+  message(i)
+  colnames(mat2)[m:(m+4)] <- c(paste0("Cluster_", i, "_avg_counts"),
+                               paste0("Cluster_", i, "_pct1"),
+                               paste0("Cluster_", i, "_pct2"),
+                               paste0("Cluster_", i, "_log2FC"),
+                               paste0("Cluster_", i, "_padj"))
+
+  for (j in 1:nrow(DEG[which(DEG$cluster %in% i), ])) {
+    DEG_clusterN <- DEG[which(DEG$cluster %in% i), ]
+
+    mat2[which(mat2$Genes %in% DEG_clusterN[ j, "gene"]), m + 1] <- DEG_clusterN[j, "pct.1"]
+    mat2[which(mat2$Genes %in% DEG_clusterN[ j, "gene"]), m + 2] <- DEG_clusterN[j, "pct.2"]
+    mat2[which(mat2$Genes %in% DEG_clusterN[ j, "gene"]), m + 3] <- DEG_clusterN[j, "avg_log2FC"]
+    mat2[which(mat2$Genes %in% DEG_clusterN[ j, "gene"]), m + 4] <- DEG_clusterN[j, "p_val_adj"]
+  }
+  for (j in 1:nrow(mat2)){
+    mat2[j, m] <- avg2$SCT[ which(rownames(avg2$SCT) %in% mat2[j, "Genes"]), i + 1]
+  }
+  m <- m + 5
+}
+
+```
+
+```{r markers59, echo = TRUE, results = 'hide'}
+
+head(mat2)
+
+```
+
+```{r markers60, echo = FALSE, include = TRUE}
+
+sample_n(mat2, 6) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "condensed"),
+                font_size = 14, position = "center") %>%
+  row_spec(0, background = "#adc5e2", bold = T)
+```
+
+```{r download5, echo = F}
+mat2 %>%
+  download_this(
+    output_name = "NGSsc02and69_FC3000_Generals_infos_dataset",
+    output_extension = ".xlsx",
+    button_label = "Download General informations as xlsx",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+```
+
+
+# Material & Methods
+
+## Sources 
+
+- https://matthieuxmoreau.github.io/EarlyPallialNeurogenesis/html-Reports/Quality_Control.html 
+- https://satijalab.org/seurat/articles/pbmc3k_tutorial.html 
+
+- Quality control in scRNA-Seq can discriminate pacemaker cells: the mtRNA bias  ( https://link.springer.com/article/10.1007/s00018-021-03916-5 )
+
+- Normalization and variance stabilization of single-cell RNA-seq data using regularized negative binomial regression ( https://genomebiology.biomedcentral.com/articles/10.1186/s13059-019-1874-1 )
+
+- Comprehensive Integration of Single-Cell Data ( https://www.cell.com/cell/fulltext/S0092-8674(19)30559-8 ) 
+
+## Session Info
+
+
+```{r infosess}
+sessionInfo()
+```
