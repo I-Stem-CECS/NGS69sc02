@@ -1,9 +1,5 @@
 # Multi-omics expression : Analysis of keratinocyte differentiation from pluripotent stem cells. 
 
-![](https://github.com/I-Stem-CECS/NGS69sc02/img/fond_presMJ_2.png) 
-
- <img src="[your_relative_path_here_number_2_large_name](https://github.com/I-Stem-CECS/NGS69sc02/img/fond_presMJ_2.png)">
-
 ## Descriptions 
 
 - Projet NGS-platform 
