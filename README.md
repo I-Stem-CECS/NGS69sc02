@@ -10,7 +10,7 @@ Multi-omics expression : Analysis of keratinocyte differentiation from pluripote
 - Samples : 9
 - Organism : Human GRCh38
 
-## Steps  
+## Analysis  
 
 - DEG ( NGSsc2and69_D0-D8-D15-P0-HPEK.Rmd ) 
 - Automatic annotation of cells ( NGSsc2and69_CellID.Rmd ) 
