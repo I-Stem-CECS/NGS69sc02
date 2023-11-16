@@ -1,6 +1,6 @@
 # Multi-omics expression : Analysis of keratinocyte differentiation from pluripotent stem cells. 
 
-![](../img/fond_presMJ_2.png){width=100%} 
+![](../img/fond_presMJ_2.png) 
 
 ## Descriptions 
 
