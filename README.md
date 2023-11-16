@@ -7,7 +7,6 @@ Multi-omics expression : Analysis of keratinocyte differentiation from pluripote
 - Projet NGS-platform 
 - Authors : Margot Jarrige, Hélène Polvèche, Alexandre Carteron
 - Sequencing type : scRNAseq 10X
-- Samples : 9
 - Organism : Human GRCh38
 
 ## Analysis  
